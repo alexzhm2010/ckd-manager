@@ -126,6 +126,33 @@ padding:10px 12px;font-size:13px;margin-top:8px}
 .imp-dup b{color:var(--red)}
 .imp-ok{background:#effaf4;border-left:3px solid var(--green);border-radius:10px;
 padding:10px 12px;font-size:13px}
+.imp-warn{background:#fffbf2;border-left:3px solid #e0a33c;border-radius:10px;
+padding:10px 12px;font-size:13px;margin-top:8px}
+.imp-warn b{color:#a06a12}
+.imp-warn>b{color:#a06a12}
+/* 导入前的逐项核对：值可直接改，右侧圈勾确认 */
+.ci-hd{display:flex;justify-content:space-between;align-items:baseline;margin:12px 2px 1px}
+.ci-hd b{font-size:12.5px}
+.ci-pg{font-size:11px;color:#7b8794}
+.ci-pg b{color:#2f6fb5;font-weight:700}
+.ci-row{display:flex;align-items:center;gap:4px;font-size:12.5px;padding:2px;
+border-bottom:1px dotted #eceff3}
+.ci-row:hover{background:#fafcfe}
+.ci-n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#3d4b59}
+.ci-n i{font-style:normal;color:#c2ccd6;font-size:10px;margin-left:5px}
+.ci-in{width:54px;text-align:right;border:none;border-bottom:1px dashed #d3dce5;background:transparent;
+font-family:inherit;font-size:12.5px;font-weight:700;color:#3d4b59;padding:0 1px 1px;outline:none;
+border-radius:0;flex:0 0 auto}
+.ci-in:focus{border-bottom:1px solid var(--pri2);background:#eef5fd}
+.ci-row.hi .ci-in{color:#d93a3a}
+.ci-row.lo .ci-in{color:#0b6e99}
+.ci-u{color:#9aa7b4;font-size:10px;flex:0 0 34px;overflow:hidden;white-space:nowrap}
+.ci-ok{width:22px;height:22px;border-radius:50%;border:1px solid #c9d4de;background:#fff;
+color:#b3bfcb;font-size:11px;line-height:1;padding:0;flex:0 0 auto;cursor:pointer}
+.ci-ok.on{background:#e6f7ee;border-color:#7cc79a;color:#1a9e63;font-weight:700}
+.ci-un{background:#fdf2f2;border-left:3px solid var(--red);border-radius:9px;padding:6px 10px;
+font-size:11.5px;color:#8a5a5a;margin-top:8px;line-height:1.65}
+.ci-un b{color:#d93a3a}
 /* ==== 底栏 ==== */
 nav{position:fixed;left:0;right:0;bottom:0;background:rgba(255,255,255,.96);backdrop-filter:blur(12px);
 border-top:1px solid var(--line);display:flex;max-width:820px;margin:0 auto;padding:7px 0 8px;z-index:50}
@@ -298,7 +325,7 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
       📌 <b>识别方式</b><br>
       ① <b>文字版 PDF</b>：浏览器本地直接读文字，最快最准，无需下载引擎<br>
       ② <b>扫描件 / 手机截图</b>：本地 OCR 识别，首次需下载约 17MB 引擎，之后走缓存<br>
-      ③ <b>无论哪种都先预览</b>，核对无误再点「确认写入」；同一天同一项已存在时整批停止，不覆盖旧数据
+      ③ <b>无论哪种都先预览</b>：同一天导入过的会先提示是否重复；确认后逐项核对数值，核对完才写入
     </div>
   </div>
   <div class="card">
@@ -1616,8 +1643,142 @@ function groupImp(){
   return [...map.values()].sort((a,b)=>a.date.localeCompare(b.date));
 }
 
-let impOpen={};
-function toggleImp(d){ impOpen[d]=!impOpen[d]; renderImpResult(); }
+/* ---------- 导入前：同日重复检测 + 逐项核对 ---------- */
+let impOver={};        // 用户已确认"仍要导入"的日期
+
+/* 本次识别结果 vs 档案里同一天的报告 */
+function impDup(){
+  const out=[];
+  for(const g of groupImp()){
+    if(!g.date) continue;
+    const all=rptItems(g.date);
+    // 只跟「同名项目」比：同一天可能有生化、血常规两份报告，互不算重复
+    const old=all.filter(o=>g.items.some(it=>it.n===o.n));
+    if(all.length&&!old.length) continue;      // 同日的另一份报告，直接往下走
+    if(!all.length){
+      // 没有整份报告，但这一天可能手动记过几项指标
+      const L=DB.labs&&DB.labs[g.date]||{};
+      const ks=Object.keys(L).filter(k=>L[k]!=null);
+      if(ks.length){
+        out.push({date:g.date, oldN:ks.length, newN:g.items.length,
+          chg:[], add:[], del:[], labsOnly:true,
+          names:ks.map(k=>META[k]?META[k].n:k).slice(0,4)});
+      }
+      continue;
+    }
+    const chg=[], add=[], del=[];
+    for(const it of g.items){
+      const o=old.find(x=>x.n===it.n);
+      if(!o) add.push({n:it.n, now:it.v});
+      else if(String(o.v)!==String(it.v)) chg.push({n:it.n, now:it.v, old:o.v});
+    }
+    for(const o of old) if(!g.items.some(x=>x.n===o.n)) del.push({n:o.n, old:o.v});
+    out.push({date:g.date, oldN:old.length, newN:g.items.length, chg, add, del});
+  }
+  return out;
+}
+function impOverrideAll(){
+  impDup().forEach(d=>{ impOver[d.date]=true; });
+  renderImpResult();
+}
+
+/* 改了值以后重算高低 */
+function restat(it){
+  if(typeof it.v==='number' && it.lo!=null && it.hi!=null){
+    it.st = it.v>it.hi?'high':(it.v<it.lo?'low':'ok');
+  }else if(typeof it.v==='string'){
+    it.st = /阴性|negative|neg/i.test(it.v) ? 'ok' : (/\+|阳性/.test(it.v) ? 'high' : 'ok');
+  }
+}
+
+function impRow(di,ii,it){
+  const cls=it.st==='high'?' hi':(it.st==='low'?' lo':'');
+  const ref=(it.lo!=null&&it.hi!=null)?`<i>${it.lo}-${it.hi}</i>`:'';
+  return `<div class="ci-row${cls}" data-row="${di}_${ii}">
+    <span class="ci-n" title="${it.n} ${it.lo!=null?it.lo+'-'+it.hi:''}">${it.n}${ref}</span>
+    <input class="ci-in" data-k="${di}_${ii}" value="${it.v}" inputmode="decimal"
+      onchange="impCommit(${di},${ii},this)"
+      onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">
+    <span class="ci-u">${it.u||''}</span>
+    <button class="ci-ok${it._ok?' on':''}" data-ok="${di}_${ii}" onclick="impMark(${di},${ii})"
+      title="${it._ok?'已核对，点击取消':'标记为与原件一致'}">${it._ok?'✓':'○'}</button>
+  </div>`;
+}
+
+function impPaint(di,ii,it){
+  const row=document.querySelector(`.ci-row[data-row="${di}_${ii}"]`);
+  if(row){ row.classList.toggle('hi',it.st==='high'); row.classList.toggle('lo',it.st==='low'); }
+  const b=document.querySelector(`.ci-ok[data-ok="${di}_${ii}"]`);
+  if(b){ b.classList.toggle('on',!!it._ok); b.textContent=it._ok?'✓':'○'; }
+}
+
+/* 手改一项的数值 */
+function impCommit(di,ii,el){
+  const g=groupImp()[di];
+  if(!g||!g.items[ii]) return;
+  const it=g.items[ii];
+  const raw=String(el.value||'').trim();
+  if(!raw){ el.value=it.v; return; }
+  const v=/^-?\d+(\.\d+)?$/.test(raw)?+raw:raw;
+  if(String(it.v)!==String(v)){
+    it.v=v;
+    delete it.raw;                 // 人工改过，不再是自动修正值
+    delete it._fix;
+    restat(it);
+  }
+  it._ok=true;                     // 改过即视为已核对
+  el.value=it.v;
+  impPaint(di,ii,it); impProgress();
+}
+
+function impMark(di,ii){
+  const g=groupImp()[di];
+  if(!g||!g.items[ii]) return;
+  const it=g.items[ii];
+  it._ok=!it._ok;
+  impPaint(di,ii,it); impProgress();
+}
+
+function impGroupOk(gi){
+  const g=groupImp()[gi];
+  if(!g) return;
+  g.items.forEach(it=>{ it._ok=true; });
+  renderImpResult();
+}
+
+function impAllOk(){
+  groupImp().forEach(g=>g.items.forEach(it=>{ it._ok=true; }));
+  renderImpResult();
+}
+
+function impStat(){
+  const groups=groupImp();
+  const total=groups.reduce((s,g)=>s+g.items.length,0);
+  const done=groups.reduce((s,g)=>s+g.items.filter(i=>i._ok).length,0);
+  return {total,done};
+}
+
+function impProgress(){
+  const {total,done}=impStat();
+  const pg=document.getElementById('impPg');
+  if(pg) pg.innerHTML=`已核对 <b>${done}</b>/${total} 项`;
+  const go=document.getElementById('impGo');
+  if(go){
+    go.textContent=done>=total?`确认导入 ${total} 项`:`还有 ${total-done} 项待核对`;
+    go.style.opacity=done>=total?'1':'.55';
+  }
+  const all=document.getElementById('impAllOk');
+  if(all) all.style.display=done>=total?'none':'';
+}
+
+function impGoFn(){
+  const {total,done}=impStat();
+  if(done<total){
+    toast(`还有 ${total-done} 项没核对：点值可直接修改，点右侧 ○ 标记一致`);
+    return;
+  }
+  confirmImport();
+}
 
 function renderImpResult(){
   const res=document.getElementById('impResult');
@@ -1635,129 +1796,130 @@ function renderImpResult(){
     return;
   }
 
-  // 追踪指标（会进趋势图的 18 项）重复检测
-  const dups=[], fresh=[], seen=new Set();
+  // 追踪指标（会进趋势图的 18 项）：只去重，不改写用户已核对的历史
+  const fresh=[], seen=new Set();
   for(const p of impParsed){
     if(!p.date) continue;
     const sig=p.date+'|'+p.key;
-    const has=DB.labs[p.date]&&DB.labs[p.date][p.key]!=null;
-    if(has||seen.has(sig)){
-      dups.push({...p, old: DB.labs[p.date]?DB.labs[p.date][p.key]:null});
-    }else{
-      seen.add(sig); fresh.push(p);
-    }
+    if(seen.has(sig)) continue;
+    seen.add(sig); fresh.push(p);
   }
 
-  let html='';
-
-  // 有重复 → 停止导入（避免覆盖已核实的记录）
+  // ① 同一天已经导入过 → 先问用户，不写入任何数据
+  const dups=impDup().filter(d=>!impOver[d.date]);
   if(dups.length){
-    html+=`<div class="imp-dup">
-      <b>⚠️ 检测到 ${dups.length} 项重复，已停止导入</b>
-      <div style="margin-top:7px;font-size:12px;line-height:1.8">
-      ${dups.slice(0,10).map(d=>`· <b>${d.date}</b> ${META[d.key].n}：档案已有 <b>${d.old!=null?d.old:'（重复项）'}</b>，本次识别 ${d.v}`).join('<br>')}
-      ${dups.length>10?`<br>…另有 ${dups.length-10} 项`:''}
-      </div>
-      <div style="margin-top:9px;font-size:11.5px;color:#7b8794;line-height:1.6">
-      为避免覆盖已核实的记录，<b>本次不会写入任何数据</b>。<br>
-      如需更新已有数值，请告诉我具体哪一项，我核对后处理。</div>
+    res.innerHTML=dups.map(d=>{
+      if(d.labsOnly){
+        return `<div class="imp-warn">
+          <b>⚠️ ${d.date} 这一天，档案里已经记过 ${d.oldN} 项指标</b>
+          <div style="margin-top:7px;font-size:12px;line-height:1.85;color:#5b6b7a">
+            之前是单独补录的（${d.names.join('、')}${d.oldN>4?' 等':''}），没有整份报告。
+            继续导入会把这些项的数值更新成报告上的值，其余 ${d.newN} 项一起补进去。
+          </div>
+          <div style="margin-top:8px;font-size:11.5px;color:#7b8794;line-height:1.65">
+            如果这天已经导过整份报告，选取消即可。</div>
+        </div>`;
+      }
+      const same=!d.chg.length&&!d.add.length&&!d.del.length;
+      return `<div class="imp-warn">
+        <b>⚠️ ${d.date} 这份报告，档案里已经有了</b>
+        <div style="margin-top:7px;font-size:12px;line-height:1.85;color:#5b6b7a">
+          已存 <b>${d.oldN}</b> 项，本次识别 <b>${d.newN}</b> 项${
+            d.chg.length?`，其中 <b style="color:#b3730a">${d.chg.length} 项数值不同</b>`
+            :'，同名项目数值完全一致'}${
+            d.add.length?`；${d.add.length} 项是这次新读到的`:
+            d.del.length?`；档案里 ${d.del.length} 项这次没读到`:''}。
+        </div>
+        ${d.chg.length?`<div style="margin-top:6px;font-size:11.5px;line-height:1.85;color:#8a6a1a">
+          ${d.chg.slice(0,6).map(x=>`· ${x.n}：档案 <b>${x.old}</b> → 本次 <b>${x.now}</b>`).join('<br>')}
+          ${d.chg.length>6?`<br>…另有 ${d.chg.length-6} 项`:''}
+        </div>`:''}
+        <div style="margin-top:8px;font-size:11.5px;color:#7b8794;line-height:1.65">
+          ${same?'内容相同，多半是重复导入，没必要再导一次。'
+                 :'若确实是同一天的另一份报告，选「仍要导入」后会先进入逐项核对，核对完才写入。'}</div>
+      </div>`;
+    }).join('');
+    // 内容完全一致的，主按钮给"取消"；有不一致时反过来，让"仍要导入"更显眼
+    const allSame=dups.every(d=>d.labsOnly||(!d.chg.length&&!d.add.length&&!d.del.length));
+    act.innerHTML=`<div style="flex:1 1 100%">
+      <button class="btn${allSame?'':' ghost'}" onclick="clearImp()">${allSame?'取消导入':'取消本次导入'}</button>
+      <div style="margin-top:8px"><button class="btn${allSame?' ghost':''}" onclick="impOverrideAll()">${allSame?'仍要导入':'仍要导入，逐项核对'}</button></div>
     </div>`;
-    res.innerHTML=html;
-    act.innerHTML=`<button class="btn ghost" onclick="clearImp()">关闭</button>`;
+    window._fresh=fresh;
     return;
   }
 
-  const prow=it=>{
-    const abn=isAbn(it);
-    const col=abn?(it.st==='high'?'#d93a3a':'#0b6e99'):'#51606f';
-    const ref=(it.lo!=null&&it.hi!=null)?`<span style="color:#b0bcc8;font-size:10.5px">参考 ${it.lo}-${it.hi}</span>`:'';
-    const fx=it.raw?`<span style="color:#c08a00;font-size:10.5px" title="原件读数 ${it.raw}，按参考区间修正"> ≈</span>`:'';
-    const mk=abn&&typeof it.v==='number'?(it.st==='high'?' ↑':' ↓'):'';
-    return `<div style="font-size:12px;line-height:1.78;display:flex;justify-content:space-between;gap:8px${abn?'':';opacity:.7'}">
-      <span style="flex:1;min-width:0">${it.n}</span>
-      <span style="white-space:nowrap"><b style="color:${col}">${it.v}${fx}${mk}</b> ${ref}</span></div>`;
-  };
+  // ② 逐项核对
+  let html=`<div class="imp-ok"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+      <b>✅ 识别到 ${allItems} 项</b>
+      <span class="ci-pg" id="impPg">已核对 <b>0</b>/${allItems}</span>
+    </div>
+    <div style="margin-top:5px;font-size:11.5px;color:#5b6b7a;line-height:1.65">
+      照原件核对，<b>数值可直接点开改</b>，无误点右侧 ○；全部核对完才写入${
+        allAbn?`（<span style="color:#d93a3a">${allAbn} 项超出参考范围</span>）`:''}。
+    </div>
+  </div>`;
 
-  if(groups.length){
-    html+=`<div class="imp-ok"><b>✅ 识别到 ${allItems} 项检验结果</b>
-      <span style="font-size:11.5px;color:#51606f">（${allAbn} 项超出参考范围）</span>
-      <div style="margin-top:8px">${groups.map(g=>{
-        const abn=g.items.filter(isAbn);
-        const open=!!impOpen[g.date];
-        return `<div style="margin-top:9px">
-          <div style="display:flex;justify-content:space-between;align-items:baseline">
-            <b style="font-size:12.5px">${g.date||'日期未识别'}</b>
-            <span style="font-size:11px;color:${abn.length?'#d93a3a':'#7b8794'}">${g.items.length} 项${abn.length?` · ${abn.length} 项异常`:' · 全部正常'}</span>
-          </div>
-          ${(open?g.items:(abn.length?abn:g.items.slice(0,6))).map(prow).join('')}
-          ${(open||g.items.length>(abn.length||6))?`<button class="mini" onclick="toggleImp('${g.date}')">${open?'收起':'查看全部 '+g.items.length+' 项'}</button>`:''}
-        </div>`;
-      }).join('')}</div>
-      <div style="margin-top:8px;font-size:11.5px;color:#7b8794">
-      ⚠️ OCR 识别可能存在偏差，写入前请对照原件扫一眼异常项。</div>
-    </div>`;
-  }
-
-  if(fresh.length){
-    html+=`<div class="imp-ok" style="background:#f4faf7">
-      <b>📈 其中 ${fresh.length} 项属于日常追踪指标，会同步到趋势图</b>
-      <div style="margin-top:6px;font-size:12px;line-height:1.85">
-      ${Object.keys(fresh.reduce((m,p)=>{(m[p.date]=m[p.date]||[]).push(p);return m;},{}))
-        .sort().map(d=>`<div><b>${d}</b>：${fresh.filter(p=>p.date===d).map(p=>{
-          const bad=impSuspect(p);
-          return `${META[p.key].n} <b style="color:${bad?'#d93a3a':'#1a9e63'}">${p.v}</b>`+(bad?' <span style="color:#d93a3a;font-size:11px">⚠ 数值可疑</span>':'');
-        }).join('、')}</div>`).join('')}
-      </div>
-      ${impParsed.some(impSuspect)?'<div style="margin-top:6px;font-size:11.5px;color:#d93a3a">标红的数值与你的历史值差距过大，<b>通常是位数或小数点识别错误</b>，请重点核对。</div>':''}
-    </div>`;
-  }
+  html+=groups.map((g,gi)=>{
+    const abn=g.items.filter(isAbn);
+    const over=impOver[g.date];
+    return `<div class="ci-hd" style="margin-top:14px">
+      <b>${g.date||'日期未识别'}</b>
+      <span class="ci-pg" style="color:${abn.length?'#d93a3a':'#7b8794'};display:flex;align-items:center;gap:8px">
+        <span>${g.items.length} 项${abn.length?` · ${abn.length} 项异常`:' · 全部正常'}${over?' · 覆盖已有':''}</span>
+        <button class="mini" onclick="impGroupOk(${gi})">这组一致</button>
+      </span>
+    </div>` + g.items.map((it,ii)=>impRow(gi,ii,it)).join('');
+  }).join('');
 
   const fixed=groups.reduce((s,g)=>s+g.items.filter(it=>it.raw).length,0);
   if(fixed){
-    const list=groups.flatMap(g=>g.items.filter(it=>it.raw).map(it=>`${it.n}：读成 ${it.raw} → 按 ${it.v}`));
-    html+=`<div class="imp-dup"><b>ℹ️ ${fixed} 项数值像是丢了小数点，已按参考区间修正</b><br>
-      <span style="font-size:11.5px;color:#51606f">${list.slice(0,6).join('；')}</span><br>
-      <span style="font-size:11.5px;color:#7b8794">修正后落在参考范围内，不记为异常。如与实际不符请告诉我。</span></div>`;
+    const list=groups.flatMap(g=>g.items.filter(it=>it.raw).map(it=>`${it.n} 读成 ${it.raw}，按参考区间记作 ${it.v}`));
+    html+=`<div class="ci-un" style="background:#fdf7ec;border-left-color:#c08a00;color:#8a6a1a">
+      <b>ℹ️ ${fixed} 项像是丢了小数点</b>：${list.slice(0,4).join('；')}${list.length>4?' 等':''}。
+      已按参考区间修正（预览里显示的就是修正后的值），如与原件不符请直接改。</div>`;
   }
 
-  const noDate=groups.filter(g=>!g.date);
-  if(noDate.length){
-    html+=`<div class="imp-dup"><b>⚠️ 有 ${noDate.length} 份报告没识别出检查日期</b><br>
-      <span style="font-size:11.5px;color:#7b8794">会先存到「日期未识别」下，可在记录页对照原件补日期。</span></div>`;
+  if(fresh.length){
+    html+=`<div class="imp-ok" style="background:#f4faf7;margin-top:10px">
+      <b>📈 其中 ${fresh.length} 项属于日常追踪指标，会同步到趋势图</b>
+      <div style="margin-top:6px;font-size:12px;line-height:1.85">
+      ${Object.keys(fresh.reduce((m,p)=>{(m[p.date]=m[p.date]||[]).push(p);return m;},{})).sort().map(d=>
+        `<div><b>${d}</b>：${fresh.filter(p=>p.date===d).map(p=>{
+          const bad=impSuspect(p);
+          return `${META[p.key].n} <b style="color:${bad?'#d93a3a':'#1a9e63'}">${p.v}</b>`+(bad?' <span style="color:#d93a3a;font-size:11px">⚠ 数值可疑</span>':'');
+        }).join('、')}</div>`).join('')}
+      </div></div>`;
   }
 
   if(impOrphan||impSeqMiss>2){
-    // 尿常规里颜色、镜检这类非数值项本来就整理不出来，提示时说明白
     const bits=[];
     if(impSeqMax) bits.push(`报告编号到 ${impSeqMax} 项，其中 <b>${impSeqMiss} 项没整理出结果</b>`);
     if(impOrphan) bits.push(`另有 ${impOrphan} 处异常箭头对应的数值没读准`);
-    html+=`<div class="imp-dup"><b>⚠️ 这份报告没有读全</b><br>
-      <span style="font-size:12px">${bits.join('；')}。</span><br>
-      <span style="font-size:11.5px;color:#7b8794">颜色、镜检这类非数值项本来就不会入库；其余多为字迹模糊或表格线干扰。异常项请对照原件核一眼。</span></div>`;
+    html+=`<div class="ci-un"><b>这份报告没有读全</b>：${bits.join('；')}。颜色、镜检这类非数值项本来就不会入库；
+      其余多为字迹模糊或表格线干扰，请对照原件补一下。</div>`;
   }
 
   res.innerHTML=html;
-  const parts=[];
-  if(allItems) parts.push(`记录 ${allItems} 项结果`);
-  if(fresh.length) parts.push(`${fresh.length} 项进趋势图`);
-  act.innerHTML = (allItems||fresh.length)
-    ? `<button class="btn" onclick="confirmImport()">确认${parts.join(' + ')}</button>
-       <button class="btn ghost" onclick="clearImp()">取消</button>`
-    : `<button class="btn ghost" onclick="clearImp()">关闭</button>`;
+  act.innerHTML=`<div style="flex:1 1 100%">
+    <div style="display:flex;gap:8px">
+      <button class="btn" id="impGo" style="flex:2" onclick="impGoFn()">还有 ${allItems} 项待核对</button>
+      <button class="btn ghost" id="impAllOk" style="flex:1.1" onclick="impAllOk()">全部一致</button>
+    </div>
+    <div style="margin-top:8px"><button class="btn ghost" onclick="clearImp()">取消本次导入</button></div>
+  </div>`;
   window._fresh=fresh;
+  impProgress();
 }
 
 /* ---------- 确认写入 ---------- */
 function confirmImport(){
   const fresh=window._fresh||[];
   const groups=groupImp();
-  if(!fresh.length&&!groups.length) return;
-  // 二次校验防并发/重复点击
-  const conflict=fresh.filter(p=>DB.labs[p.date]&&DB.labs[p.date][p.key]!=null);
-  if(conflict.length){
-    toast('⚠️ 检测到重复数据，已停止写入');
-    return;
-  }
+  if(!groups.length) return;
+  const {total,done}=impStat();
+  if(done<total){ toast(`还有 ${total-done} 项没核对`); return; }
+
   fresh.forEach(p=>{
     DB.labs[p.date]=DB.labs[p.date]||{};
     DB.labs[p.date][p.key]=p.v;
@@ -1771,11 +1933,13 @@ function confirmImport(){
     const d=g.date||'日期未识别';
     const cur=DB.rpt[d]=(DB.rpt[d]&&DB.rpt[d].items)?DB.rpt[d]:{items:[]};
     for(const it of g.items){
+      const save={n:it.n,v:it.v,u:it.u,lo:it.lo,hi:it.hi,st:it.st};
+      if(it.raw!=null) save.raw=it.raw;      // 自动修正过的留痕
       const old=cur.items.find(x=>x.n===it.n);
       if(old){
-        if(old.v!==it.v||old.st!==it.st){ Object.assign(old,it); updN++; }
+        if(String(old.v)!==String(it.v)||old.st!==it.st){ Object.assign(old,save); updN++; }
       }else{
-        cur.items.push(it); newN++;
+        cur.items.push(save); newN++;
       }
       if(isAbn(it)) abnN++;
     }
@@ -1788,9 +1952,9 @@ function confirmImport(){
   if(fresh.length) msg.push(`${fresh.length} 项进趋势图`);
   document.getElementById('impResult').innerHTML=
     `<div class="imp-ok"><b>✅ 已记录 ${msg.join('、')}</b><br>
-     <span style="font-size:12px;color:#51606f">${rn} 项全部存入「记录 → 化验报告」，其中 ${abnN} 项异常已标红。${fresh.length?'趋势图已更新。':''}</span></div>`;
+     <span style="font-size:12px;color:#51606f">${rn} 项全部存入「记录 → 化验报告」（新增 ${newN} 项${updN?`、更新 ${updN} 项`:''}），其中 ${abnN} 项异常已标红。${fresh.length?'趋势图已更新。':''}</span></div>`;
   document.getElementById('impActions').innerHTML=`<button class="btn ghost" onclick="clearImp()">完成</button>`;
-  impFiles=[]; impParsed=[]; impRpt=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0; impOpen={};
+  impFiles=[]; impParsed=[]; impRpt=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0; impOver={};
   document.getElementById('impFile').value='';
   document.getElementById('impList').innerHTML='';
   document.getElementById('impState').textContent='';
@@ -1799,7 +1963,7 @@ function confirmImport(){
 }
 
 function clearImp(){
-  impParsed=[]; impFiles=[]; impRpt=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0;
+  impParsed=[]; impFiles=[]; impRpt=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0; impOver={};
   document.getElementById('impResult').innerHTML='';
   document.getElementById('impActions').innerHTML='';
   document.getElementById('impList').innerHTML='';
