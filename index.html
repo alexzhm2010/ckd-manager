@@ -883,22 +883,28 @@ async function parseReports(){
 
     let worker=null;
     if(needOcr){
-      impProgress('初始化中文识别…',10);
+      impProgress('准备识别引擎…',8);
       // worker(blob URL) 内相对路径会失效，全部转绝对路径
       const BASE=new URL('vendor/', location.href).href;
-      // 90 秒超时兜底：引擎初始化失败时引导转 AI 处理
-      const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('初始化超时')),ms))]);
+      // 首次要下载约 17MB 引擎，慢网络下 90 秒不够，放宽到 180 秒
+      const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('引擎下载超时')),ms))]);
       worker=await withTimeout(Tesseract.createWorker('chi_sim',1,{
         logger:m=>{
-          if(m.status==='recognizing text'){
-            const p=10+Math.round(m.progress*80);
-            impProgress('正在识别文字…',Math.min(p,92));
+          const st=m.status||'';
+          if(st==='recognizing text'){
+            impProgress('正在识别文字…',Math.min(10+Math.round(m.progress*80),92));
+          }else if(st==='loading tesseract core'){
+            impProgress('首次使用：正在下载识别内核（约 6.6MB）…',8);
+          }else if(st==='loading language traineddata'){
+            impProgress('首次使用：正在下载中文模型（约 1.7MB）…',9);
+          }else if(st==='initializing tesseract'||st==='initializing api'){
+            impProgress('正在初始化识别引擎…',10);
           }
         },
         workerPath:BASE+'tesseract-worker.min.js',
         corePath:BASE,
         langPath:BASE,
-      }),90000);
+      }),180000);
       // 保留列间距：后续靠「列首」定位结果值，空格被压缩就定位不到
       try{ await worker.setParameters({preserve_interword_spaces:'1'}); }catch(e){}
     }
@@ -928,8 +934,14 @@ async function parseReports(){
 
   }catch(e){
     impProgressHide();
-    res.innerHTML=`<div class="imp-dup"><b>⚠️ 识别过程出错</b><br>
-      ${e.message||'未知错误'}<br><br>建议把报告直接发给我，我帮你处理。</div>`;
+    const msg=e.message||'未知错误';
+    res.innerHTML=/超时/.test(msg)
+      ? `<div class="imp-dup"><b>⚠️ 识别引擎没能下载完</b><br>
+         首次使用需要下载约 17MB 识别引擎，当前网络较慢，没能在 3 分钟内完成。<br><br>
+         <b>建议</b>：换到 Wi-Fi 后重试一次——下载完浏览器会缓存，之后不再下载（通常 10 秒内出结果）。<br>
+         也可以把报告直接发给我，我帮你处理。</div>`
+      : `<div class="imp-dup"><b>⚠️ 识别过程出错</b><br>
+         ${msg}<br><br>建议把报告直接发给我，我帮你处理。</div>`;
   }
 }
 
