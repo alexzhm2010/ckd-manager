@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>肾病管理平台 · 匿名用户</title>
+<title>肾病健康管理平台</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 <style>
 :root{
@@ -104,12 +104,35 @@ nav div.on{color:var(--pri2);font-weight:600}
 .toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%) translateY(14px);background:rgba(31,45,61,.93);
 color:#fff;padding:10px 20px;border-radius:22px;font-size:13.5px;opacity:0;transition:.25s;z-index:99;pointer-events:none}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+/* ==== 登录 / 解密 ==== */
+.login{position:fixed;inset:0;z-index:9999;background:linear-gradient(135deg,#0b4f6e,#1287b8 60%,#17a2c4);
+display:flex;align-items:center;justify-content:center;padding:22px}
+.login-card{background:#fff;border-radius:22px;padding:32px 26px;width:100%;max-width:340px;text-align:center;
+box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
+.login-logo{font-size:44px;line-height:1}
+.login-card h2{margin:10px 0 4px;font-size:20px;color:var(--txt)}
+.login-card .hint{font-size:12.5px;color:var(--muted);margin-top:2px}
+.login-card input{margin:18px 0 12px;text-align:center;font-size:17px;letter-spacing:2px;border:1.5px solid #dbe3ea}
+.login-card input:focus{border-color:var(--pri2);box-shadow:0 0 0 3px rgba(18,135,184,.12)}
+.login-err{color:var(--red);font-size:13px;min-height:18px;margin-top:4px}
+.login-secure{font-size:11px;color:var(--muted);margin-top:14px;line-height:1.6}
 </style>
 </head>
 <body>
+<div id="login" class="login">
+  <div class="login-card">
+    <div class="login-logo">🩺</div>
+    <h2>肾病健康管理平台</h2>
+    <div class="hint">输入访问密码以查看您的健康数据</div>
+    <input type="password" id="pwd" placeholder="访问密码" autocomplete="off" inputmode="text">
+    <button class="btn" onclick="doLogin()">解锁查看</button>
+    <div class="login-err" id="loginErr"></div>
+    <div class="login-secure">🔒 数据已用 AES-256-GCM 加密，密码仅在您的设备本地用于解密，不会上传、服务器也不保存。</div>
+  </div>
+</div>
 <header>
-  <h1>🫘 我的肾病管理平台</h1>
-  <div class="sub">匿名用户 · 45岁 · 慢性肾脏病4期 · 高血压 · 痛风</div>
+  <h1>🩺 我的肾病管理平台</h1>
+  <div class="sub">我的 · 45岁 · 慢性肾脏病4期 · 高血压 · 痛风</div>
   <div class="chips">
     <span class="chip" id="hdEgfr">eGFR 24.25</span>
     <span class="chip" id="hdDate">最近检查 2026-10-29</span>
@@ -655,10 +678,39 @@ function go(p,el){
   if(p==='log') renderLogs();
 }
 
-/* ==================== 初始化 ==================== */
-document.getElementById('labDate').value=today();
-document.getElementById('labKey').innerHTML=ORDER.map(k=>`<option value="${k}">${META[k].n}</option>`).join('');
-renderHome(); renderLogs(); renderKSym(); renderKnow();
+/* ==================== 登录与解密 ==================== */
+const PBKDF2_ITER = 210000;
+function b64ToBytes(b){ const s=atob(b); const u=new Uint8Array(s.length); for(let i=0;i<s.length;i++) u[i]=s.charCodeAt(i); return u; }
+async function deriveKey(pwd, salt){
+  const enc=new TextEncoder();
+  const km=await crypto.subtle.importKey('raw', enc.encode(pwd), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2', salt, iterations:PBKDF2_ITER, hash:'SHA-256'}, km, {name:'AES-GCM', length:256}, false, ['decrypt']);
+}
+async function doLogin(){
+  const err=document.getElementById('loginErr');
+  if(!window.crypto || !crypto.subtle){
+    err.textContent='当前打开方式无法解密（需 https 或 localhost）。请使用 GitHub Pages 链接打开。';
+    return;
+  }
+  const pwd=document.getElementById('pwd').value;
+  if(!pwd){ err.textContent='请输入密码'; return; }
+  err.textContent='解密中…';
+  try{
+    const key=await deriveKey(pwd, b64ToBytes(ENCRYPTED_DATA.salt));
+    const pt=await crypto.subtle.decrypt({name:'AES-GCM', iv:b64ToBytes(ENCRYPTED_DATA.iv)}, key, b64ToBytes(ENCRYPTED_DATA.ct));
+    window.HISTORY=JSON.parse(new TextDecoder().decode(pt));
+    document.getElementById('login').style.display='none';
+    initApp();
+  }catch(e){ err.textContent='密码错误，请重试'; }
+}
+document.getElementById('pwd').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
+
+/* ==================== 初始化（登录成功后调用） ==================== */
+function initApp(){
+  document.getElementById('labDate').value=today();
+  document.getElementById('labKey').innerHTML=ORDER.map(k=>`<option value="${k}">${META[k].n}</option>`).join('');
+  renderHome(); renderLogs(); renderKSym(); renderKnow();
+}
 window.addEventListener('resize',()=>{ chart&&chart.resize(); });
 </script>
 </body>
