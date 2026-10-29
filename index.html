@@ -4,7 +4,19 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>肾病健康管理平台</title>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<script>
+/* 图表库异步加载：同步引用会在大文件慢下载时把整页卡成白屏 */
+window.__echartsReady=new Promise(function(res){
+  function load(src,ok,bad){
+    var s=document.createElement('script');
+    s.src=src; s.async=true;
+    s.onload=ok; s.onerror=bad;
+    document.head.appendChild(s);
+  }
+  load('https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js', res,
+    function(){ load('vendor/echarts.min.js', res, res); });
+});
+</script>
 <style>
 :root{
 --bg:#f4f6f9; --card:#fff; --txt:#1f2d3d; --muted:#7b8794;
@@ -682,6 +694,7 @@ function drawChart(){
     yAxis={type:'value',scale:true,axisLabel:{fontSize:10,color:'#8899a6'},splitLine:{lineStyle:{color:'#f0f4f7'}}};
   }
 
+  if(!window.echarts) return;                    // 图表库还在下载
   if(!chart) chart=echarts.init(document.getElementById('mainChart'));
   chart.setOption({
     color:COLORS,
@@ -855,19 +868,23 @@ async function parseReports(){
   impParsed=[];
 
   impProgress('加载识别引擎…',5);
-  try{
-    await loadScript('vendor/pdf.min.js');
-    await loadScript('vendor/tesseract.min.js');
-  }catch(e){
+  // 依赖库优先 CDN（本站 GitHub Pages 在国内仅十几 KB/s），失败回退本站
+  const VCDN='https://cdn.jsdelivr.net/npm/';
+  let pdfBase=null;
+  try{ await loadScript(VCDN+'pdfjs-dist@3.11.174/legacy/build/pdf.min.js'); pdfBase=VCDN+'pdfjs-dist@3.11.174/legacy/build/'; }
+  catch(e){ pdfBase=null; }
+  if(!pdfBase){ try{ await loadScript('vendor/pdf.min.js'); pdfBase='vendor/'; }catch(e){} }
+  try{ await loadScript('vendor/tesseract.min.js'); }
+  catch(e){
     impProgressHide();
     res.innerHTML=`<div class="imp-dup"><b>⚠️ 识别引擎加载失败</b><br>
       请确认通过网页服务访问本页（而非双击打开文件），或把报告直接发给我处理。</div>`;
     return;
   }
 
-  // pdf.js worker
-  if(window.pdfjsLib){
-    pdfjsLib.GlobalWorkerOptions.workerSrc='vendor/pdf.worker.min.js';
+  // pdf.js worker 的地址要跟主库同源，否则版本不匹配会报错
+  if(window.pdfjsLib&&pdfBase){
+    pdfjsLib.GlobalWorkerOptions.workerSrc=pdfBase+'pdf.worker.min.js';
   }
 
   try{
@@ -885,26 +902,38 @@ async function parseReports(){
     if(needOcr){
       impProgress('准备识别引擎…',8);
       // worker(blob URL) 内相对路径会失效，全部转绝对路径
-      const BASE=new URL('vendor/', location.href).href;
-      // 首次要下载约 17MB 引擎，慢网络下 90 秒不够，放宽到 180 秒
+      const LOCAL=new URL('vendor/', location.href).href;
+      // 引擎体积约 5.7MB。本站(GitHub Pages)在国内实测仅 13KB/s，要 7 分钟；
+      // 公共 CDN 可达 1MB/s，约 6 秒。故优先 CDN，失败再回退本站。
+      const CDN='https://cdn.jsdelivr.net/npm/';
       const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('引擎下载超时')),ms))]);
-      worker=await withTimeout(Tesseract.createWorker('chi_sim',1,{
+      const mk=(opt)=>Tesseract.createWorker('chi_sim',1,{
         logger:m=>{
           const st=m.status||'';
           if(st==='recognizing text'){
             impProgress('正在识别文字…',Math.min(10+Math.round(m.progress*80),92));
           }else if(st==='loading tesseract core'){
-            impProgress('首次使用：正在下载识别内核（约 6.6MB）…',8);
+            impProgress('首次使用：正在加载识别内核（约 3.9MB）…',8);
           }else if(st==='loading language traineddata'){
-            impProgress('首次使用：正在下载中文模型（约 1.7MB）…',9);
+            impProgress('首次使用：正在加载中文模型（约 1.7MB）…',9);
           }else if(st==='initializing tesseract'||st==='initializing api'){
             impProgress('正在初始化识别引擎…',10);
           }
         },
-        workerPath:BASE+'tesseract-worker.min.js',
-        corePath:BASE,
-        langPath:BASE,
-      }),180000);
+        ...opt,
+      });
+      const cdnOpt={
+        workerPath:CDN+'tesseract.js@5.1.1/dist/worker.min.js',
+        corePath:CDN+'tesseract.js-core@5.0.0',
+        langPath:CDN+'@tesseract.js-data/chi_sim@1.0.0/4.0.0_best_int',
+      };
+      const localOpt={workerPath:LOCAL+'tesseract-worker.min.js', corePath:LOCAL, langPath:LOCAL};
+      try{
+        worker=await withTimeout(mk(cdnOpt),60000);
+      }catch(e){
+        impProgress('CDN 未响应，改用本站资源（较慢，请耐心等待）…',8);
+        worker=await withTimeout(mk(localOpt),240000);
+      }
       // 保留列间距：后续靠「列首」定位结果值，空格被压缩就定位不到
       try{ await worker.setParameters({preserve_interword_spaces:'1'}); }catch(e){}
     }
@@ -1210,12 +1239,25 @@ function findDate(text){
    （例如「平均血红蛋白浓度 333.0」被读成 3330 塞给血红蛋白） */
 function impSuspect(p){
   const m=META[p.key];
-  if(!m||!m.ref||m.ref.length<2) return false;
-  const lo=m.ref[0], hi=m.ref[1];
-  if(!(hi>0)) return false;
-  if(p.v>hi*6) return true;
-  if(lo>0&&p.v<lo*0.12) return true;
-  return false;
+  if(!m) return false;
+  // 以「你自己的历史值」为基准：CKD 的肌酐、尿蛋白本来就会远超参考范围，
+  // 拿参考范围判断会把真实结果误标成错误
+  const hs=(HISTORY[p.key]||[]).map(x=>x&&x.v).filter(v=>v!=null&&isFinite(v));
+  for(const d of Object.keys(DB.labs||{})){
+    const v=DB.labs[d]&&DB.labs[d][p.key];
+    if(v!=null&&isFinite(v)) hs.push(v);
+  }
+  let lo=Infinity, hi=-Infinity, n=0;
+  for(const v of hs){ if(v<lo)lo=v; if(v>hi)hi=v; n++; }
+  if(n>=2){
+    const span=Math.max(hi-lo, Math.abs(hi)*0.5, 1);
+    return p.v>hi+span*3 || p.v<lo-span*3;
+  }
+  // 完全没有历史：只拦「明显离谱」的，宁可漏报也不误标
+  if(!m.ref||m.ref.length<2) return false;
+  const rl=m.ref[0], rh=m.ref[1];
+  if(!(rh>0)) return false;
+  return p.v>rh*50 || (rl>0&&p.v<rl*0.02);
 }
 
 function renderImpResult(){
@@ -1353,6 +1395,7 @@ function renderMed(){
     days.push((d.getMonth()+1)+'/'+d.getDate());
     data.push(Object.keys(rec).filter(x=>rec[x]).length);
   }
+  if(!window.echarts) return;                    // 图表库还在下载
   const mc=echarts.init(document.getElementById('medChart'));
   mc.setOption({
     grid:{left:34,right:16,top:16,bottom:26},
@@ -1464,10 +1507,13 @@ async function doLogin(){
 document.getElementById('pwd').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-function initApp(){
+async function initApp(){
   document.getElementById('labDate').value=today();
   document.getElementById('labKey').innerHTML=ORDER.map(k=>`<option value="${k}">${META[k].n}</option>`).join('');
-  renderHome(); renderLogs(); renderKSym(); renderKnow(); initImport();
+  // 图表库可能还在下载（首次约 1MB），先渲染不依赖图表的页面，避免整页空白
+  renderLogs(); renderKSym(); renderKnow(); initImport();
+  if(window.__echartsReady) await window.__echartsReady;
+  renderHome();
 }
 window.addEventListener('resize',()=>{ chart&&chart.resize(); });
 </script>
