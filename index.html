@@ -219,11 +219,25 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
   <div class="login-card">
     <div class="login-logo">🩺</div>
     <h2>肾病健康管理平台</h2>
-    <div class="hint">输入访问密码以查看您的健康数据</div>
-    <input type="password" id="pwd" placeholder="访问密码" autocomplete="off" inputmode="text">
-    <button class="btn" onclick="doLogin()">解锁查看</button>
-    <div class="login-err" id="loginErr"></div>
-    <div class="login-secure">🔒 数据已用 AES-256-GCM 加密，密码仅在您的设备本地用于解密，不会上传、服务器也不保存。</div>
+    <div id="cloudLogin" style="display:none">
+      <div class="hint">登录云端账号，数据在多台设备间同步</div>
+      <input type="email" id="cloudEmail" placeholder="邮箱" autocomplete="username" inputmode="email" style="letter-spacing:0;font-size:15px">
+      <input type="password" id="cloudPwd" placeholder="密码" autocomplete="current-password">
+      <button class="btn" onclick="doCloudLogin()">登录并同步</button>
+      <div class="login-err" id="cloudErr"></div>
+      <div class="login-secure">还没有账号？<a href="#" onclick="doCloudSignUp();return false">用此邮箱注册</a>
+        · <a href="#" onclick="toggleLoginMode();return false">改用本机密码解锁</a></div>
+    </div>
+    <div id="localLogin">
+      <div class="hint">输入访问密码以查看您的健康数据</div>
+      <input type="password" id="pwd" placeholder="访问密码" autocomplete="off" inputmode="text">
+      <button class="btn" onclick="doLogin()">解锁查看</button>
+      <div class="login-err" id="loginErr"></div>
+      <div class="login-secure">🔒 数据已用 AES-256-GCM 加密，密码仅在您的设备本地用于解密，不会上传、服务器也不保存。</div>
+    </div>
+    <div class="login-secure" id="switchCloud" style="display:none">
+      <a href="#" onclick="toggleLoginMode();return false">改用云端账号登录</a>
+    </div>
   </div>
 </div>
 <header>
@@ -251,6 +265,10 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
   <div class="card">
     <h2><span class="t"><span class="bar"></span>待办事项</span></h2>
     <div id="todoHome"></div>
+  </div>
+  <div class="card" id="cloudCard">
+    <h2><span class="t"><span class="bar"></span>数据存储</span><span class="muted" id="cloudTag"></span></h2>
+    <div id="cloudBox"></div>
   </div>
 </section>
 
@@ -442,8 +460,10 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
 /* ==================== 数据 ==================== */
 </script>
 <script src="history.js"></script>
+<script src="cloud-config.js"></script>
 <script>
 const KEY='kidney_mgr_v1';
+let FACTS_READY=false;      // 等下面的表结构和 META 都就绪后，save 才写 facts
 const DEFAULT={
   logs:[], meds:{}, visits:[], labs:{}, syms:{}, abn:{}, rpt:{}
 };
@@ -454,7 +474,11 @@ function load(){
   try{ const d=JSON.parse(localStorage.getItem(KEY)); return d?Object.assign(blank(),d):blank(); }
   catch(e){ return blank(); }
 }
-function save(){ localStorage.setItem(KEY, JSON.stringify(DB)); }
+function save(){
+  localStorage.setItem(KEY, JSON.stringify(DB));
+  // DB 只是内存模型，真正的数据源是 facts 表（本地缓存 + 云端两端同一套行）
+  if(FACTS_READY) persistFacts();
+}
 let DB=load();
 
 /* 旧版只存「异常项」（DB.abn），新版存整份报告（DB.rpt）。这里把老数据搬过去。 */
@@ -502,6 +526,7 @@ const META={
   ldl:{n:'低密度脂蛋白LDL',u:'mmol/L',ref:[0,3.12],goal:'&lt;2.6（心血管高危）',dir:'low'},
 };
 const ORDER=['egfr','crea','upro','acr','k','ua','hgb','hco3','p','pth','tg','ldl','ca','alb','cysc','urea','malb','tc'];
+FACTS_READY=true;          // META / ORDER 已就绪，之后 save 可以安全地写 facts
 
 const MEDS=[
  {k:'m1',n:'培哚普利氨氯地平',d:'每日1次 · 降压降蛋白尿',t:'早'},
@@ -540,6 +565,382 @@ const KNOW=[
  {t:'你的药为什么这样配',c:'培哚普利（ACEI）降低肾小球内压 + 达格列净（SGLT2i）改善肾小管代谢，两者是国际指南推荐的"肾保护黄金组合"；非布司他控尿酸、他汀降脂保护心血管。'},
  {t:'血钾为什么重要',c:'高钾会引起心律失常，是最危险的电解质紊乱之一。ACEI 和 SGLT2i 都会升钾，你的 5.03 已在临界，超过 5.5 需立即就医。'},
 ];
+
+/* ==================== 统一数据表 facts ====================
+   历史基线、每次导入的报告、手动补录，本质都是「某一类数据」，
+   统一存成 facts 行；DB 只是从 facts 派生出来的内存视图。
+   - kind='lab'   一天一个追踪指标（趋势图只读这一类行）
+   - kind='rpt'   报告里的一个检验项目（含正常项）
+   - kind='block'  用药/复查/症状/日志整块数据
+   本地模式写在 localStorage 缓存里；配置了 Supabase 后同一批行同步到云端。 */
+const FACT_CACHE_KEY='kidney_facts_v2';
+const CLOUD=(window.CLOUD_CONFIG||{});
+const CLOUD_ON=!!(CLOUD.url&&CLOUD.anonKey);
+
+let FACTS=[];                 // 当前生效的全部 facts 行
+let FACTMAP=new Map();        // uid -> row，便于按业务键比对
+let LABIDX=new Map();         // 指标 key -> [{date,v}]，seriesOf 直接用
+let supa=null, cloudUser=null, cloudLastSync=0, cloudErrMsg='';
+let cloudFlushing=false, cloudSyncTimer=null;
+let pendingUp=new Map(), pendingDel=new Set();
+
+function blankDb(){ return JSON.parse(JSON.stringify(DEFAULT)); }
+
+function flagOf(v,m){
+  if(typeof v!=='number'||!isFinite(v)||!m||!m.ref||m.ref.length<2) return null;
+  if(v>m.ref[1]) return 'high';
+  if(v<m.ref[0]) return 'low';
+  return null;
+}
+
+function readFactCache(){
+  try{
+    const arr=JSON.parse(localStorage.getItem(FACT_CACHE_KEY));
+    return Array.isArray(arr)?arr:[];
+  }catch(e){ return []; }
+}
+function writeFactCache(rows){
+  try{ localStorage.setItem(FACT_CACHE_KEY, JSON.stringify(rows)); }catch(e){}
+}
+
+/* 两条同 uid 的行取 updated_at 较晚的一条；时间相同则后来的覆盖先来的 */
+function mergeFacts(a,b){
+  const m=new Map();
+  (a||[]).forEach(r=>{ if(r&&r.uid) m.set(r.uid,r); });
+  (b||[]).forEach(r=>{
+    if(!r||!r.uid) return;
+    const cur=m.get(r.uid);
+    if(!cur||(r.updated_at||0)>=(cur.updated_at||0)) m.set(r.uid,r);
+  });
+  return [...m.values()];
+}
+
+/* 历史密文解密出来的 H 只作为「更早的导入」一次性灌进 facts，source='seed' */
+function historyFacts(H){
+  const out=[];
+  if(!H) return out;
+  Object.keys(H).forEach(key=>{
+    const arr=H[key]||[];
+    arr.forEach(x=>{
+      if(!x||!x.date||x.v==null) return;
+      const v=Number(x.v);
+      if(!isFinite(v)) return;
+      const m=META[key]||{};
+      out.push({
+        uid:'lab|'+x.date+'|'+key, kind:'lab', date:x.date, key,
+        name:m.n||key, value:v, unit:m.u||'',
+        ref_lo:m.ref?m.ref[0]:null, ref_hi:m.ref?m.ref[1]:null,
+        flag:flagOf(v,m), source:'seed', updated_at:1, created_at:1
+      });
+    });
+  });
+  return out;
+}
+
+function rptUid(date,it){
+  return 'rpt|'+date+'|'+normName(it.n)+'|'+normUnit(it.u);
+}
+
+/* 把 DB 展开成 facts 行。touch=true 表示用户刚改过数据，变更行用当前时间；
+   启动时用 touch=false，这样本地旧数据不会盖掉云端较新的值 */
+function deriveFacts(db,touch){
+  const now=Date.now();
+  const at=touch?now:1;
+  const rows=[];
+  const stamp=(prev,changed)=>{
+    if(!prev) return at;
+    if(!changed) return prev.updated_at||1;
+    return touch?now:(prev.updated_at||1);
+  };
+
+  [['logs',db.logs||[]],['meds',db.meds||{}],['visits',db.visits||[]],['syms',db.syms||{}]].forEach(([k,v])=>{
+    const uid='block|'+k;
+    const prev=FACTMAP.get(uid);
+    const changed=!prev||JSON.stringify((prev.meta||{}).data)!==JSON.stringify(v);
+    rows.push({
+      uid, kind:'block', key:k, name:k, value:null,
+      meta:{data:v}, source:prev&&!changed?(prev.source||'manual'):'manual',
+      updated_at:stamp(prev,changed), created_at:prev?prev.created_at:at
+    });
+  });
+
+  Object.keys(db.labs||{}).forEach(date=>{
+    const rec=db.labs[date]||{};
+    Object.keys(rec).forEach(key=>{
+      const raw=rec[key];
+      if(raw==null) return;
+      const v=Number(raw);
+      if(!isFinite(v)) return;
+      const m=META[key]||{};
+      const uid='lab|'+date+'|'+key;
+      const prev=FACTMAP.get(uid);
+      const changed=!prev||prev.value!==v;
+      rows.push({
+        uid, kind:'lab', date, key, name:m.n||key, value:v, unit:m.u||'',
+        ref_lo:m.ref?m.ref[0]:null, ref_hi:m.ref?m.ref[1]:null,
+        flag:flagOf(v,m),
+        source:prev&&!changed?(prev.source||'manual'):'manual',
+        updated_at:stamp(prev,changed), created_at:prev?prev.created_at:at
+      });
+    });
+  });
+
+  Object.keys(db.rpt||{}).forEach(date=>{
+    const r=db.rpt[date];
+    const items=Array.isArray(r)?r:((r&&r.items)||[]);
+    items.forEach((it,i)=>{
+      if(!it||!it.n) return;
+      const uid=rptUid(date,it);
+      const prev=FACTMAP.get(uid);
+      const lo=it.lo==null?null:Number(it.lo);
+      const hi=it.hi==null?null:Number(it.hi);
+      const changed=!prev||prev.name!==it.n||prev.value!==it.v||
+        (prev.unit||'')!==(it.u||'')||prev.ref_lo!==lo||prev.ref_hi!==hi||
+        (prev.flag||null)!==(it.st||null)||(prev.raw==null?null:prev.raw)!==(it.raw==null?null:Number(it.raw));
+      rows.push({
+        uid, kind:'rpt', date, name:it.n, value:it.v, unit:it.u||'',
+        ref_lo:lo, ref_hi:hi, flag:it.st||null,
+        raw:it.raw==null?null:Number(it.raw),
+        meta:{ord:i},
+        source:prev&&!changed?(prev.source||'import'):'import',
+        updated_at:stamp(prev,changed), created_at:prev?prev.created_at:at
+      });
+    });
+  });
+  return rows;
+}
+
+/* 用 facts 重建 DB，并刷新 seriesOf 用的索引。所有页面仍然按原逻辑读 DB */
+function applyFacts(rows){
+  FACTS=rows.slice();
+  FACTMAP=new Map(rows.filter(r=>r&&r.uid).map(r=>[r.uid,r]));
+  const db=blankDb();
+  const rptBox={};
+  rows.forEach(r=>{
+    if(!r) return;
+    if(r.kind==='lab'&&r.date&&r.key){
+      (db.labs[r.date]=db.labs[r.date]||{})[r.key]=Number(r.value);
+    }else if(r.kind==='rpt'&&r.date){
+      const it={n:r.name,v:r.value,u:r.unit||'',lo:r.ref_lo,hi:r.ref_hi,st:r.flag||undefined};
+      if(r.raw!=null) it.raw=r.raw;
+      (rptBox[r.date]=rptBox[r.date]||[]).push({it,ord:(r.meta&&r.meta.ord)||0});
+    }else if(r.kind==='block'&&r.key){
+      db[r.key]=r.meta&&r.meta.data!==undefined?r.meta.data:
+        ((r.key==='logs'||r.key==='visits')?[]:{});
+    }
+  });
+  Object.keys(rptBox).forEach(d=>{
+    db.rpt[d]={items:rptBox[d].sort((a,b)=>a.ord-b.ord).map(x=>x.it)};
+  });
+  DB=db;
+  rebuildIndex(rows);
+  writeFactCache(rows);
+}
+
+/* 刷新 LABIDX 与 window.HISTORY（旧代码里仍有少数地方读 HISTORY） */
+function rebuildIndex(rows){
+  const idx=new Map(), h={};
+  rows.forEach(r=>{
+    if(!r||r.kind!=='lab'||!r.date||r.key==null) return;
+    let a=idx.get(r.key); if(!a){ a=[]; idx.set(r.key,a); }
+    a.push({date:r.date,v:r.value});
+    (h[r.key]=h[r.key]||[]).push({date:r.date,v:r.value});
+  });
+  idx.forEach(a=>a.sort((x,y)=>x.date.localeCompare(y.date)));
+  Object.keys(h).forEach(k=>h[k].sort((x,y)=>x.date.localeCompare(y.date)));
+  LABIDX=idx;
+  window.HISTORY=h;
+}
+
+/* 用户改动数据后：把 DB 变更合进 facts，并排队同步云端 */
+function persistFacts(){
+  const prevMap=FACTMAP;
+  const rows=deriveFacts(DB,true);
+  const next=new Map(rows.map(r=>[r.uid,r]));
+  const up=[], del=[];
+  rows.forEach(r=>{
+    const p=prevMap.get(r.uid);
+    if(!p||p.updated_at!==r.updated_at) up.push(r);
+  });
+  prevMap.forEach((_,uid)=>{ if(!next.has(uid)) del.push(uid); });
+  FACTS=rows; FACTMAP=next;
+  rebuildIndex(rows);
+  writeFactCache(rows);
+  if(up.length||del.length) queueCloudSync(up,del);
+}
+
+/* 启动时：本地缓存 + 历史密文 + 本地 DB 合成一份 facts */
+function localHydrate(){
+  let rows=readFactCache();
+  FACTMAP=new Map(rows.map(r=>[r.uid,r]));
+  rows=mergeFacts(rows,historyFacts(window.HISTORY));
+  FACTMAP=new Map(rows.map(r=>[r.uid,r]));
+  rows=mergeFacts(rows,deriveFacts(DB,false));
+  applyFacts(rows);
+}
+
+/* ==================== 云端同步 ==================== */
+async function getSupabase(){
+  if(supa) return supa;
+  const mod=await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
+  supa=mod.createClient(CLOUD.url,CLOUD.anonKey,{auth:{persistSession:true,autoRefreshToken:true}});
+  return supa;
+}
+
+function toCloudRow(r){
+  return {
+    user_id:(cloudUser&&cloudUser.id)||undefined,
+    uid:r.uid, kind:r.kind, date:r.date||null, key:r.key||null, name:r.name||null,
+    value_num:typeof r.value==='number'&&isFinite(r.value)?r.value:null,
+    value_text:typeof r.value==='number'?null:(r.value==null?null:String(r.value)),
+    unit:r.unit||null,
+    ref_lo:r.ref_lo==null?null:Number(r.ref_lo),
+    ref_hi:r.ref_hi==null?null:Number(r.ref_hi),
+    flag:r.flag||null, source:r.source||null,
+    raw:r.raw==null?null:Number(r.raw),
+    meta:r.meta||{},
+    created_at:new Date(r.created_at||Date.now()).toISOString(),
+    updated_at:new Date(r.updated_at||Date.now()).toISOString()
+  };
+}
+function fromCloudRow(x){
+  return {
+    uid:x.uid, kind:x.kind, date:x.date||null, key:x.key||null, name:x.name||null,
+    value:x.value_num!=null?x.value_num:x.value_text,
+    unit:x.unit||'', ref_lo:x.ref_lo, ref_hi:x.ref_hi, flag:x.flag||null,
+    raw:x.raw, meta:x.meta||{},
+    created_at:Date.parse(x.created_at)||1, updated_at:Date.parse(x.updated_at)||1,
+    source:x.source||'manual'
+  };
+}
+
+async function cloudPullAll(){
+  const sb=await getSupabase();
+  const size=500; let from=0, all=[];
+  while(true){
+    const {data,error}=await sb.from('facts').select('*').range(from,from+size-1);
+    if(error) throw error;
+    if(!data||!data.length) break;
+    all=all.concat(data.map(fromCloudRow));
+    if(data.length<size) break;
+    from+=size;
+  }
+  return all;
+}
+
+function queueCloudSync(ups,del){
+  if(!cloudUser||!CLOUD_ON) return;
+  (ups||[]).forEach(r=>{ pendingDel.delete(r.uid); pendingUp.set(r.uid,r); });
+  (del||[]).forEach(uid=>{ pendingUp.delete(uid); pendingDel.add(uid); });
+  if(cloudSyncTimer) clearTimeout(cloudSyncTimer);
+  cloudSyncTimer=setTimeout(()=>{ cloudSyncTimer=null; flushCloud(); },1200);
+}
+
+async function flushCloud(){
+  if(!cloudUser) return;
+  if(cloudFlushing){
+    if(!cloudSyncTimer) cloudSyncTimer=setTimeout(()=>{ cloudSyncTimer=null; flushCloud(); },1500);
+    return;
+  }
+  if(!pendingUp.size&&!pendingDel.size) return;
+  cloudFlushing=true; renderCloud();
+  const up=[...pendingUp.values()]; pendingUp.clear();
+  const del=[...pendingDel]; pendingDel.clear();
+  try{
+    const sb=await getSupabase();
+    for(let i=0;i<up.length;i+=300){
+      const chunk=up.slice(i,i+300).map(toCloudRow);
+      const {error}=await sb.from('facts').upsert(chunk,{onConflict:'user_id,uid'});
+      if(error) throw error;
+    }
+    for(let i=0;i<del.length;i+=300){
+      const chunk=del.slice(i,i+300);
+      const {error}=await sb.from('facts').delete().eq('user_id',cloudUser.id).in('uid',chunk);
+      if(error) throw error;
+    }
+    cloudLastSync=Date.now(); cloudErrMsg='';
+  }catch(e){
+    up.forEach(r=>pendingUp.set(r.uid,r));
+    del.forEach(uid=>pendingDel.add(uid));
+    cloudErrMsg=(e&&(e.message||e.error_description||e.hint))||String(e);
+    console.warn('云端同步失败',e);
+  }finally{
+    cloudFlushing=false; renderCloud();
+    // 同步过程中又有新改动，补排一次
+    if(cloudUser&&(pendingUp.size||pendingDel.size)&&!cloudSyncTimer){
+      cloudSyncTimer=setTimeout(()=>{ cloudSyncTimer=null; flushCloud(); },1200);
+    }
+  }
+}
+
+/* 手动同步：先拉云端，按 updated_at 合并，再把本地较新的行推上去 */
+async function cloudSyncNow(){
+  if(!cloudUser){ showLogin(); return; }
+  toast('正在同步…');
+  try{
+    await flushCloud();
+    const cloudRows=await cloudPullAll();
+    const cloudMap=new Map(cloudRows.map(r=>[r.uid,r]));
+    const rows=mergeFacts(cloudRows,FACTS);
+    const up=rows.filter(r=>{
+      const c=cloudMap.get(r.uid);
+      return !c||(r.updated_at||0)>(c.updated_at||0);
+    });
+    applyFacts(rows);
+    queueCloudSync(up,[]);
+    await flushCloud();
+    renderLogs(); renderRpt(); renderHome(); renderVisit(); renderCloud(); drawChart();
+    toast('已同步');
+  }catch(e){
+    cloudErrMsg=(e&&(e.message||e.error_description))||String(e);
+    renderCloud();
+    toast('同步失败：'+cloudErrMsg);
+  }
+}
+
+/* 云端登录后，需要把本机那份加密历史灌进 facts 一次 */
+async function seedHistoryPrompt(){
+  const pwd=prompt('输入本机历史数据的访问密码（一次性解密并上传到云端）');
+  if(!pwd) return;
+  const H=await tryDecryptHistory(pwd);
+  if(!H){ toast('密码不正确，无法解密本机历史'); return; }
+  window.HISTORY=H;
+  const seed=historyFacts(H).filter(r=>!FACTMAP.has(r.uid));
+  if(!seed.length){ toast('本机历史已全部在云端，无需重复导入'); return; }
+  applyFacts(mergeFacts(FACTS,seed));
+  renderLogs(); renderRpt(); renderHome(); renderVisit(); drawChart();
+  queueCloudSync(seed,[]);
+  toast(`已导入 ${seed.length} 条历史数据，正在上传…`);
+}
+
+/* ==================== 云端状态卡片 ==================== */
+function renderCloud(){
+  const box=document.getElementById('cloudBox');
+  const tag=document.getElementById('cloudTag');
+  if(!box) return;
+  if(!CLOUD_ON){
+    tag.textContent='本地模式';
+    box.innerHTML=`<div class="muted" style="line-height:1.8">数据保存在本机浏览器。在 cloud-config.js 填入 Supabase 地址与 anon key 后，可开启跨设备同步。</div>`;
+    return;
+  }
+  cloudLastSync=cloudLastSync||0;
+  if(!cloudUser){
+    tag.textContent='未登录';
+    box.innerHTML=`<div class="muted" style="margin-bottom:10px">云端已配置，登录后数据会在多台设备间同步。</div>
+      <button class="btn" onclick="showLogin()">登录云端账号</button>`;
+    return;
+  }
+  tag.textContent=cloudFlushing?'同步中…':(cloudErrMsg?'同步失败':'已连接');
+  const when=cloudLastSync?('上次同步 '+new Date(cloudLastSync).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})):'本次尚未同步';
+  box.innerHTML=`<div class="muted">账号 ${esc(cloudUser.email||'')}</div>
+    <div class="muted">${when}</div>
+    ${cloudErrMsg?`<div class="imp-dup" style="margin-top:8px">同步失败：${esc(cloudErrMsg)}</div>`:''}
+    <div class="imp-actions" style="margin-top:12px">
+      <button class="btn ghost" onclick="cloudSyncNow()">立即同步</button>
+      <button class="btn ghost" onclick="seedHistoryPrompt()">导入本机历史</button>
+    </div>
+    <div style="margin-top:10px"><button class="mini" onclick="cloudSignOut()">退出云端账号</button></div>`;
+}
 
 /* ==================== 工具 ==================== */
 function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),1800)}
@@ -713,16 +1114,10 @@ function toggleKey(k){
 }
 function clearSel(){ selKeys=['egfr']; renderSeg(); drawChart(); toast('已重置为 eGFR'); }
 
-/* 取某指标全部数据（历史 + 用户录入/导入）。同一日期只保留一条：
-   本地补录与导入的值以较晚写入的 DB.labs 为准，否则图上点与提示会不一致 */
+/* 取某指标全部数据。历史基线与后续导入、补录都已经是 facts 里的同类行，
+   这里只读这一张表（LABIDX 在 applyFacts / persistFacts 时重建） */
 function seriesOf(k){
-  const map=new Map();
-  (HISTORY[k]||[]).forEach(x=>{ if(x&&x.date) map.set(x.date,{date:x.date,v:x.v}); });
-  Object.keys(DB.labs||{}).forEach(d=>{
-    const rec=DB.labs[d];
-    if(rec&&rec[k]!=null) map.set(d,{date:d,v:rec[k]});
-  });
-  return [...map.values()].sort((a,b)=>a.date.localeCompare(b.date));
+  return (LABIDX.get(k)||[]).map(x=>({date:x.date,v:x.v}));
 }
 
 function drawChart(){
@@ -2325,6 +2720,25 @@ async function deriveKey(pwd, salt){
   const km=await crypto.subtle.importKey('raw', enc.encode(pwd), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey({name:'PBKDF2', salt, iterations:PBKDF2_ITER, hash:'SHA-256'}, km, {name:'AES-GCM', length:256}, false, ['decrypt']);
 }
+/* 用同一个密码试解历史密文；解不开返回 null（云端账号密码可能与它不同） */
+async function tryDecryptHistory(pwd){
+  if(!window.crypto||!crypto.subtle) return null;
+  try{
+    const key=await deriveKey(pwd, b64ToBytes(ENCRYPTED_DATA.salt));
+    const pt=await crypto.subtle.decrypt({name:'AES-GCM', iv:b64ToBytes(ENCRYPTED_DATA.iv)}, key, b64ToBytes(ENCRYPTED_DATA.ct));
+    return JSON.parse(new TextDecoder().decode(pt));
+  }catch(e){ return null; }
+}
+const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('云端连接超时')),ms))]);
+
+function authMsg(e){
+  const m=String((e&&(e.message||e.error_description))||e||'');
+  if(/invalid login credentials/i.test(m)) return '邮箱或密码错误';
+  if(/email not confirmed/i.test(m)) return '邮箱还没确认：请到 Supabase 关闭邮箱确认，或点邮件里的链接';
+  if(/user already registered/i.test(m)) return '该邮箱已注册，直接登录即可';
+  return m||'登录失败，请重试';
+}
+
 async function doLogin(){
   const err=document.getElementById('loginErr');
   if(!window.crypto || !crypto.subtle){
@@ -2334,26 +2748,131 @@ async function doLogin(){
   const pwd=document.getElementById('pwd').value;
   if(!pwd){ err.textContent='请输入密码'; return; }
   err.textContent='解密中…';
+  const H=await tryDecryptHistory(pwd);
+  if(!H){ err.textContent='密码错误，请重试'; return; }
+  window.HISTORY=H;
+  err.textContent='正在加载数据…';
+  await startApp();
+}
+
+async function doCloudLogin(){
+  const err=document.getElementById('cloudErr');
+  const email=document.getElementById('cloudEmail').value.trim();
+  const pwd=document.getElementById('cloudPwd').value;
+  if(!email||!pwd){ err.textContent='请输入邮箱和密码'; return; }
+  err.textContent='登录中…';
   try{
-    const key=await deriveKey(pwd, b64ToBytes(ENCRYPTED_DATA.salt));
-    const pt=await crypto.subtle.decrypt({name:'AES-GCM', iv:b64ToBytes(ENCRYPTED_DATA.iv)}, key, b64ToBytes(ENCRYPTED_DATA.ct));
-    window.HISTORY=JSON.parse(new TextDecoder().decode(pt));
-    document.getElementById('login').style.display='none';
-    initApp();
-  }catch(e){ err.textContent='密码错误，请重试'; }
+    const sb=await getSupabase();
+    const {data,error}=await sb.auth.signInWithPassword({email,password:pwd});
+    if(error) throw error;
+    cloudUser=data.user||(data.session&&data.session.user);
+    const H=await tryDecryptHistory(pwd);
+    if(H) window.HISTORY=H;               // 密码恰好一致时顺手把本机历史灌进来
+    err.textContent='正在加载数据…';
+    await startApp();
+  }catch(e){ err.textContent=authMsg(e); }
+}
+
+async function doCloudSignUp(){
+  const err=document.getElementById('cloudErr');
+  const email=document.getElementById('cloudEmail').value.trim();
+  const pwd=document.getElementById('cloudPwd').value;
+  if(!email){ err.textContent='先填写邮箱'; return; }
+  if(!pwd){ err.textContent='先填写密码'; return; }
+  err.textContent='注册中…';
+  try{
+    const sb=await getSupabase();
+    const {data,error}=await sb.auth.signUp({email,password:pwd});
+    if(error) throw error;
+    if(!data.session){
+      err.textContent='注册成功。若开启了邮箱确认，请先在 Supabase 关掉，或点邮件里的链接后再登录。';
+      return;
+    }
+    cloudUser=data.user;
+    const H=await tryDecryptHistory(pwd);
+    if(H) window.HISTORY=H;
+    await startApp();
+  }catch(e){ err.textContent=authMsg(e); }
+}
+
+function toggleLoginMode(){
+  if(!CLOUD_ON) return;
+  const c=document.getElementById('cloudLogin');
+  const sw=document.getElementById('switchCloud');
+  const showCloud=c.style.display==='none';
+  c.style.display=showCloud?'block':'none';
+  document.getElementById('localLogin').style.display=showCloud?'none':'block';
+  sw.style.display=showCloud?'none':'block';
+}
+function showLogin(){
+  const l=document.getElementById('login');
+  l.style.display='flex';
+  if(CLOUD_ON){
+    document.getElementById('cloudLogin').style.display='block';
+    document.getElementById('localLogin').style.display='none';
+    document.getElementById('switchCloud').style.display='none';
+  }
+}
+async function cloudSignOut(){
+  if(!confirm('退出云端账号？本机缓存仍保留，重新登录后以云端数据为准。')) return;
+  try{ const sb=await getSupabase(); await sb.auth.signOut(); }catch(e){}
+  cloudUser=null; cloudErrMsg=''; pendingUp.clear(); pendingDel.clear();
+  location.reload();
 }
 document.getElementById('pwd').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
+document.getElementById('cloudPwd').addEventListener('keydown',e=>{ if(e.key==='Enter') doCloudLogin(); });
+
+/* 启动数据：本地 facts（含历史密文）→ 若已登录云端则拉取合并 */
+async function bootstrapData(){
+  localHydrate();
+  if(!CLOUD_ON||!cloudUser) return;
+  try{
+    const cloudRows=await withTimeout(cloudPullAll(),12000);
+    const cloudMap=new Map(cloudRows.map(r=>[r.uid,r]));
+    const rows=mergeFacts(cloudRows,FACTS);
+    const up=rows.filter(r=>{
+      const c=cloudMap.get(r.uid);
+      return !c||(r.updated_at||0)>(c.updated_at||0);
+    });
+    applyFacts(rows);
+    const del=[...cloudMap.keys()].filter(uid=>!FACTMAP.has(uid));
+    queueCloudSync(up,del);
+  }catch(e){
+    cloudErrMsg=(e&&(e.message||e.error_description))||String(e);
+    console.warn('云端数据加载失败，先用本地缓存',e);
+  }
+}
+
+async function startApp(){
+  try{ await initApp(); }
+  finally{ document.getElementById('login').style.display='none'; }
+}
 
 /* ==================== 初始化（登录成功后调用） ==================== */
 async function initApp(){
   document.getElementById('labDate').value=today();
   document.getElementById('labKey').innerHTML=ORDER.map(k=>`<option value="${k}">${META[k].n}</option>`).join('');
+  await bootstrapData();
   // 图表库可能还在下载（首次约 1MB），先渲染不依赖图表的页面，避免整页空白
-  renderLogs(); renderRpt(); renderKSym(); renderKnow(); initImport();
+  renderLogs(); renderRpt(); renderKSym(); renderKnow(); initImport(); renderCloud();
   if(window.__echartsReady) await window.__echartsReady;
   renderHome();
 }
 window.addEventListener('resize',()=>{ chart&&chart.resize(); medChart&&medChart.resize(); });
+
+/* 配置了云端时，页面打开先尝试恢复登录态，登录过一个设备就不用再输密码 */
+(function restoreCloudSession(){
+  if(!CLOUD_ON) return;
+  document.getElementById('cloudLogin').style.display='block';
+  document.getElementById('localLogin').style.display='none';
+  document.getElementById('switchCloud').style.display='none';
+  getSupabase().then(sb=>sb.auth.getSession()).then(({data})=>{
+    if(data&&data.session&&data.session.user){
+      cloudUser=data.session.user;
+      return startApp();
+    }
+  }).catch(e=>console.warn('云端会话恢复失败',e));
+})();
 </script>
 </body>
 </html>
