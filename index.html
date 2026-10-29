@@ -243,6 +243,11 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
   </div>
 
   <div class="card">
+    <h2><span class="t"><span class="bar"></span>报告异常项</span><span class="muted" id="abnCount"></span></h2>
+    <div id="abnList"></div>
+  </div>
+
+  <div class="card">
     <h2><span class="t"><span class="bar"></span>近期记录</span><button class="btn sm ghost" onclick="renderLogs()">刷新</button></h2>
     <div id="logList"></div>
   </div>
@@ -383,7 +388,7 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
 <script>
 const KEY='kidney_mgr_v1';
 const DEFAULT={
-  logs:[], meds:{}, visits:[], labs:{}, syms:{}
+  logs:[], meds:{}, visits:[], labs:{}, syms:{}, abn:{}
 };
 function load(){
   try{ const d=JSON.parse(localStorage.getItem(KEY)); return d?Object.assign({},DEFAULT,d):JSON.parse(JSON.stringify(DEFAULT)); }
@@ -769,6 +774,9 @@ function addLab(){
 /* ==================== 报告导入（OCR） ==================== */
 let impFiles=[];       // 已选文件
 let impParsed=[];      // 解析结果 [{date,key,v,src}]
+let impAbn=[];         // 非追踪项中的异常值 [{date,name,v,lo,hi,dir}]
+let impOrphan=0;       // 有异常箭头但数值未识别的行数
+let impSeqMiss=0, impSeqMax=0;   // 序号缺口（漏识别项）
 let ocrWorker=null;
 
 /* 指标别名表：用于在 OCR 文本中定位 */
@@ -955,6 +963,11 @@ async function parseReports(){
         }
       }
       extractFromText(fullText, job.name);
+      impAbn=impAbn.concat(parseAbnormal(fullText));
+      impOrphan+=countOrphanArrows(fullText);
+      const sq=countSeqGaps(fullText);
+      if(sq.max>impSeqMax) impSeqMax=sq.max;
+      impSeqMiss+=sq.missing;
     }
     if(worker) await worker.terminate();
 
@@ -1045,32 +1058,26 @@ function splitColumns(canvas){
     const cx=canvas.getContext('2d',{willReadFrequently:true});
     data=cx.getImageData(0,0,W,H).data;
   }catch(e){ return null; }
-  // 只统计表格主体（避开页眉页脚的大片空白，否则会被误判为栏间空白）
-  const y0=Math.floor(H*0.25), y1=Math.floor(H*0.80), rows=y1-y0;
+  // 只统计表格主体：页眉页脚有大片空白，会把真实的栏间空白比下去
+  const y0=Math.floor(H*0.28), y1=Math.floor(H*0.62), rows=y1-y0;
   const acc=new Uint32Array(W);
   for(let y=y0;y<y1;y++){
     const base=y*W*4;
     for(let x=0;x<W;x++){
       const i=base+x*4;
-      if((data[i]*299+data[i+1]*587+data[i+2]*114)/1000<155) acc[x]++;
+      if((data[i]*299+data[i+1]*587+data[i+2]*114)/1000<170) acc[x]++;
     }
   }
-  const th=rows*0.004;                 // 该列几乎全白
+  const th=rows*0.01;                  // 该列基本没字（放大后中缝会有插值灰边，阈值不能太死）
   const xa=Math.floor(W*0.28), xb=Math.floor(W*0.72);
-  let best=null, st=null;
+  const cands=[];
+  let st=null;
   for(let x=xa;x<xb;x++){
     if(acc[x]<th){ if(st===null) st=x; }
-    else{ if(st!==null){ const len=x-st; if(!best||len>best.len) best={st,len}; st=null; } }
+    else{ if(st!==null){ cands.push([st,x-st]); st=null; } }
   }
-  if(st!==null){ const len=xb-st; if(!best||len>best.len) best={st,len}; }
-  if(!best||best.len<W*0.022) return null;        // 中缝不够宽 → 单栏
-  const cutL=best.st, cutR=best.st+best.len;
-  if(cutL<W*0.15||W-cutR<W*0.15) return null;     // 两侧都要有足够宽度
-  let lm=0, rm=0;
-  for(let x=0;x<cutL;x++) lm+=acc[x];
-  for(let x=cutR;x<W;x++) rm+=acc[x];
-  const ratio=lm/Math.max(rm,1);
-  if(!(ratio>0.15&&ratio<6.5)) return null;       // 两侧墨量要大致均衡
+  if(st!==null) cands.push([st,xb-st]);
+  cands.sort((a,b)=>b[1]-a[1]);       // 宽的优先，逐个试，不合格就换下一个
 
   const mk=(x,w)=>{
     const c=document.createElement('canvas');
@@ -1080,9 +1087,21 @@ function splitColumns(canvas){
     cc.drawImage(canvas, x,0,w,H, 0,0,w,H);
     return c;
   };
-  const lw=Math.min(W, cutL+3);
-  const rx=Math.max(0, cutR-3);
-  return [mk(0,lw), mk(rx, W-rx)];
+
+  for(const [cutL,ln] of cands){
+    if(ln<W*0.022) break;                          // 后面只会更窄
+    const cutR=cutL+ln;
+    if(cutL<W*0.15||W-cutR<W*0.15) continue;       // 两侧都要有足够宽度
+    let lm=0, rm=0;
+    for(let x=0;x<cutL;x++) lm+=acc[x];
+    for(let x=cutR;x<W;x++) rm+=acc[x];
+    const ratio=lm/Math.max(rm,1);
+    if(!(ratio>0.15&&ratio<6.5)) continue;          // 两侧墨量要大致均衡
+    const lw=Math.min(W, cutL+3);
+    const rx=Math.max(0, cutR-3);
+    return [mk(0,lw), mk(rx, W-rx)];
+  }
+  return null;
 }
 
 /* 一页 → 一张或多张待识别图（双栏时拆成两张） */
@@ -1213,6 +1232,113 @@ function extractFromText(text, src){
   }
 }
 
+/* ---------- 通用化验单解析：抓「项目名 + 结果 + 参考区间」 ----------
+   只用来挑出「超出参考范围、但不在日常追踪清单里」的项目，记到异常项备查。
+   这类项目不进趋势图，避免把图表和标签撑爆。 */
+const ABN_NUM='\\d+(?:\\.+\\s?\\d+)*';
+const ABN_RE=new RegExp(
+  '(?:^|\\s)(\\d{1,2})\\s+' +                              // 序号
+  '([^\\d\\s][^\\d]{1,24}?)\\s*' +                         // 项目名
+  '(?:[<>≤≥]\\s?)?(' + ABN_NUM + ')\\s*' +                 // 结果
+  '(?:[↑↓⇑⇓*※#△]\\s*)?' +                                 // 异常箭头
+  '(' + ABN_NUM + ')\\s*[-~～]\\s*(' + ABN_NUM + ')', 'g');  // 参考区间
+
+function abnDec(s){
+  return parseFloat(String(s).replace(/\.+/g,'.').replace(/\s/g,'').replace(/\.$/,''));
+}
+
+/* 小数点丢失修正：OCR 常把 333.0 读成 3330、把 2.33 读成 233。
+   如果原值超出参考范围、但缩小 10/100 倍后正好落在范围内，基本可判定是小数点丢失。 */
+function fixDecimal(v, lo, hi){
+  if(v>=lo&&v<=hi) return null;
+  for(const k of [10,100,1000]){
+    const t=Math.round(v/k*1000)/1000;
+    if(t>=lo&&t<=hi) return {v:t, k};
+  }
+  return null;
+}
+
+function parseAbnormal(text){
+  const out=[];
+  if(!text) return out;
+  const date=findDate(text)||'';
+  for(const line of text.split(/[\n\r]+/)){
+    ABN_RE.lastIndex=0;
+    let m;
+    while((m=ABN_RE.exec(line))){
+      const v=abnDec(m[3]), lo=abnDec(m[4]), hi=abnDec(m[5]);
+      if(!isFinite(v)||!isFinite(lo)||!isFinite(hi)) continue;
+      if(!(hi>lo)) continue;                       // 区间无效（0-0 之类多为误读）
+      const name=m[2].replace(/[*#※△“”‘’《》，。、·\s]/g,'');
+      if(name.length<2) continue;
+      if(v>=lo&&v<=hi) continue;                   // 正常项不记
+      // 小数点丢失的，按修正后的值判断，不当作异常
+      const fix=fixDecimal(v, lo, hi);
+      if(fix){
+        if(out.some(x=>x.name===name)) continue;
+        out.push({date, name, v:fix.v, lo, hi, dir:'fix', raw:v});
+        continue;
+      }
+      // 已进入追踪清单的项目走指标流程，这里不重复
+      if(impParsed.some(p=>p.date===date&&Math.abs(p.v-v)<1e-6)) continue;
+      if(out.some(x=>x.name===name&&Math.abs(x.v-v)<1e-6)) continue;
+      out.push({date, name, v, lo, hi, dir: v>hi?'high':'low'});
+    }
+  }
+  return out;
+}
+
+/* 序号连续性：化验单项目是连续编号的，缺号说明有项目没读出来。
+   这比靠箭头可靠——箭头本身也常被 OCR 吃掉。 */
+function countSeqGaps(text){
+  const seen=new Set();
+  for(const line of text.split(/[\n\r]+/)){
+    const m=line.match(/^\s*(\d{1,2})\s+\S/);
+    if(m){ const n=+m[1]; if(n>=1&&n<=60) seen.add(n); }
+  }
+  if(seen.size<8) return {missing:0, max:0};
+  let max=0; for(const n of seen) if(n>max) max=n;
+  let missing=0;
+  for(let i=1;i<=max;i++) if(!seen.has(i)) missing++;
+  return {missing, max};
+}
+
+/* 报告里有异常箭头、但数值没识别出来的行数（用于提醒人工核对） */
+function countOrphanArrows(text){
+  let n=0;
+  for(const line of text.split(/[\n\r]+/)){
+    if(!/[↑↓]/.test(line)) continue;
+    ABN_RE.lastIndex=0;
+    if(!ABN_RE.test(line)) n++;
+  }
+  ABN_RE.lastIndex=0;
+  return n;
+}
+
+/* ---------- 记录页：报告异常项 ---------- */
+function renderAbn(){
+  const el=document.getElementById('abnList');
+  const cnt=document.getElementById('abnCount');
+  if(!el) return;
+  const dates=Object.keys(DB.abn||{}).sort().reverse();
+  const total=dates.reduce((s,d)=>s+DB.abn[d].length,0);
+  cnt.textContent=total?`共 ${total} 项`:'';
+  if(!total){
+    el.innerHTML='<div class="empty">导入报告后，超出参考范围的项目会自动记在这里</div>';
+    return;
+  }
+  el.innerHTML=dates.slice(0,6).map(d=>`
+    <div style="margin-bottom:12px">
+      <div style="font-size:11.5px;color:#7b8794;margin-bottom:5px">${d}</div>
+      ${DB.abn[d].map(it=>`
+        <div style="font-size:12.5px;line-height:1.95;display:flex;justify-content:space-between;gap:10px">
+          <span>${it.name}</span>
+          <span><b style="color:${it.dir==='high'?'#d93a3a':'#0b6e99'}">${it.v} ${it.dir==='high'?'↑':'↓'}</b>
+          <span style="color:#9aa7b4;font-size:11.5px"> 参考 ${it.lo}-${it.hi}</span></span>
+        </div>`).join('')}
+    </div>`).join('') + (dates.length>6?`<div class="muted" style="font-size:11.5px">…另有 ${dates.length-6} 次报告</div>`:'');
+}
+
 /* 从文本里找检查日期 */
 function findDate(text){
   const pats=[
@@ -1264,7 +1390,7 @@ function renderImpResult(){
   const res=document.getElementById('impResult');
   const act=document.getElementById('impActions');
 
-  if(!impParsed.length){
+  if(!impParsed.length&&!impAbn.filter(a=>a.dir!=='fix').length){
     res.innerHTML=`<div class="imp-dup"><b>⚠️ 未能识别出有效指标</b><br>
       可能原因：图片清晰度不足、报告版式特殊、或识别结果与已知指标名不匹配。<br><br>
       <b>建议</b>：换成更清晰的截图/PDF 重试；或把报告直接发给我（在对话里上传），我逐页人工核对。</div>`;
@@ -1330,9 +1456,42 @@ function renderImpResult(){
     </div>`;
   }
 
+  // 非追踪项：真异常 vs 小数点疑似错误
+  const realAbn=impAbn.filter(a=>a.dir!=='fix');
+  const fixedN=impAbn.filter(a=>a.dir==='fix').length;
+  if(realAbn.length){
+    html+=`<div class="imp-dup" style="border-color:#f0c674;background:#fffbf0">
+      <b style="color:#8a6100">另外发现 ${realAbn.length} 项超出参考范围</b>
+      <div style="margin-top:7px;font-size:12px;line-height:1.85">
+      ${realAbn.slice(0,12).map(a=>`· ${a.name} <b style="color:${a.dir==='high'?'#d93a3a':'#0b6e99'}">${a.v} ${a.dir==='high'?'↑':'↓'}</b>
+        <span style="color:#9aa7b4;font-size:11.5px">参考 ${a.lo}-${a.hi}</span>`).join('<br>')}
+      ${realAbn.length>12?`<br>…另有 ${realAbn.length-12} 项`:''}
+      </div>
+      <div style="margin-top:7px;font-size:11.5px;color:#8a6100;line-height:1.6">
+      这些项目不在日常追踪清单里，会记到「记录 → 报告异常项」备查，不进趋势图。</div>
+    </div>`;
+  }
+  if(fixedN){
+    const items=impAbn.filter(a=>a.dir==='fix');
+    html+=`<div class="imp-dup"><b>ℹ️ ${fixedN} 项数值像是丢了小数点，已按参考范围修正</b><br>
+      <span style="font-size:11.5px;color:#51606f">${items.slice(0,6).map(a=>`${a.name}：读成 ${a.raw} → 按 ${a.v}`).join('；')}</span><br>
+      <span style="font-size:11.5px;color:#7b8794">修正后都在参考范围内，不记为异常。如与实际不符请告诉我。</span></div>`;
+  }
+  if(impOrphan||impSeqMiss>2){
+    const bits=[];
+    if(impSeqMax) bits.push(`报告共 ${impSeqMax} 项，其中 <b>${impSeqMiss} 项没能识别出来</b>`);
+    if(impOrphan) bits.push(`另有 ${impOrphan} 处异常箭头对应的数值没读准`);
+    html+=`<div class="imp-dup"><b>⚠️ 这份报告没有读全</b><br>
+      <span style="font-size:12px">${bits.join('；')}。</span><br>
+      <span style="font-size:11.5px;color:#7b8794">未识别的原因多为字迹模糊、表格线干扰。如果是异常项目，可能因此漏记，<b>建议对照原件补一下</b>。</span></div>`;
+  }
+
   res.innerHTML=html;
-  act.innerHTML = fresh.length
-    ? `<button class="btn" onclick="confirmImport()">确认写入 ${fresh.length} 项</button>
+  const parts=[];
+  if(fresh.length) parts.push(`写入 ${fresh.length} 项指标`);
+  if(realAbn.length) parts.push(`记录 ${realAbn.length} 项异常`);
+  act.innerHTML = (fresh.length||realAbn.length)
+    ? `<button class="btn" onclick="confirmImport()">确认${parts.join(' + ')}</button>
        <button class="btn ghost" onclick="clearImp()">取消</button>`
     : `<button class="btn ghost" onclick="clearImp()">关闭</button>`;
   window._fresh=fresh;
@@ -1341,7 +1500,7 @@ function renderImpResult(){
 /* ---------- 确认写入 ---------- */
 function confirmImport(){
   const fresh=window._fresh||[];
-  if(!fresh.length) return;
+  if(!fresh.length&&!impAbn.length) return;
   // 二次校验防并发/重复点击
   const conflict=fresh.filter(p=>DB.labs[p.date]&&DB.labs[p.date][p.key]!=null);
   if(conflict.length){
@@ -1353,21 +1512,34 @@ function confirmImport(){
     DB.labs[p.date][p.key]=p.v;
     DB.logs.unshift({type:'lab',date:p.date,ts:Date.now(),key:p.key,v:p.v});
   });
+  // 非追踪项的异常值：单独存档，不进趋势图
+  let abnN=0;
+  DB.abn=DB.abn||{};
+  for(const a of impAbn){
+    if(!a.date||a.dir==='fix') continue;
+    const arr=DB.abn[a.date]=DB.abn[a.date]||[];
+    if(arr.some(x=>x.name===a.name)) continue;
+    arr.push({name:a.name,v:a.v,lo:a.lo,hi:a.hi,dir:a.dir});
+    abnN++;
+  }
   save();
+  const msg=[];
+  if(fresh.length) msg.push(`${fresh.length} 项指标`);
+  if(abnN) msg.push(`${abnN} 项异常`);
   document.getElementById('impResult').innerHTML=
-    `<div class="imp-ok"><b>✅ 已写入 ${fresh.length} 项指标</b><br>
-     <span style="font-size:12px;color:#51606f">趋势图已更新。如需同步到线上档案，请告诉我。</span></div>`;
+    `<div class="imp-ok"><b>✅ 已记录 ${msg.join('、')}</b><br>
+     <span style="font-size:12px;color:#51606f">${fresh.length?'趋势图已更新。':''}${abnN?'异常项在「记录」页可查看。':''}</span></div>`;
   document.getElementById('impActions').innerHTML=`<button class="btn ghost" onclick="clearImp()">完成</button>`;
-  impFiles=[]; impParsed=[];
+  impFiles=[]; impParsed=[]; impAbn=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0;
   document.getElementById('impFile').value='';
   document.getElementById('impList').innerHTML='';
   document.getElementById('impState').textContent='';
-  drawChart(); renderLogs();
-  toast(`已导入 ${fresh.length} 项`);
+  drawChart(); renderLogs(); renderAbn();
+  toast(`已记录 ${msg.join('、')}`);
 }
 
 function clearImp(){
-  impParsed=[]; impFiles=[];
+  impParsed=[]; impFiles=[]; impAbn=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0;
   document.getElementById('impResult').innerHTML='';
   document.getElementById('impActions').innerHTML='';
   document.getElementById('impList').innerHTML='';
@@ -1511,7 +1683,7 @@ async function initApp(){
   document.getElementById('labDate').value=today();
   document.getElementById('labKey').innerHTML=ORDER.map(k=>`<option value="${k}">${META[k].n}</option>`).join('');
   // 图表库可能还在下载（首次约 1MB），先渲染不依赖图表的页面，避免整页空白
-  renderLogs(); renderKSym(); renderKnow(); initImport();
+  renderLogs(); renderAbn(); renderKSym(); renderKnow(); initImport();
   if(window.__echartsReady) await window.__echartsReady;
   renderHome();
 }
