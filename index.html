@@ -98,6 +98,22 @@ vertical-align:1px;border:1px solid rgba(0,0,0,.12)}
 .axis-note{background:#f2f6f9;border-radius:10px;padding:7px 10px;font-size:11.5px;
 color:#51606f;margin-bottom:8px;line-height:1.55;display:none}
 .axis-note.on{display:block}
+/* ==== 报告导入 ==== */
+.imp-zone{border:2px dashed #cbd5df;border-radius:14px;padding:22px 14px;text-align:center;
+cursor:pointer;transition:.2s;background:#fbfcfd}
+.imp-zone:active,.imp-zone.hover{border-color:var(--pri2);background:#f2f8fc}
+.imp-ic{font-size:30px;line-height:1}
+.imp-t{font-size:14px;font-weight:600;color:var(--pri);margin-top:6px}
+.imp-s{font-size:11.5px;color:var(--muted);margin-top:3px}
+.imp-file{display:flex;align-items:center;gap:9px;padding:8px 11px;background:#f2f6f9;
+border-radius:10px;font-size:12.5px;margin-bottom:6px}
+.imp-file .fn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.imp-file .rm{color:#93a1b0;cursor:pointer;font-size:15px;padding:0 3px}
+.imp-dup{background:#fdf2f2;border-left:3px solid var(--red);border-radius:10px;
+padding:10px 12px;font-size:13px;margin-top:8px}
+.imp-dup b{color:var(--red)}
+.imp-ok{background:#effaf4;border-left:3px solid var(--green);border-radius:10px;
+padding:10px 12px;font-size:13px}
 /* ==== 底栏 ==== */
 nav{position:fixed;left:0;right:0;bottom:0;background:rgba(255,255,255,.96);backdrop-filter:blur(12px);
 border-top:1px solid var(--line);display:flex;max-width:820px;margin:0 auto;padding:7px 0 8px;z-index:50}
@@ -238,8 +254,26 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
     <table class="tb"><tbody id="goalTb"></tbody></table>
   </div>
   <div class="card">
-    <h2><span class="t"><span class="bar"></span>化验结果录入</span></h2>
-    <div class="muted" style="font-size:12px;margin-bottom:8px">新报告的数值可先手动录这里，正式复查后我再帮你补全归档</div>
+    <h2><span class="t"><span class="bar"></span>报告导入</span><span class="muted" id="impState"></span></h2>
+    <div class="imp-zone" id="impZone">
+      <div class="imp-ic">📄</div>
+      <div class="imp-t">点击选择报告文件</div>
+      <div class="imp-s">支持 PDF（文字版）/ 图片，可多选</div>
+      <input type="file" id="impFile" accept=".pdf,image/*" multiple hidden>
+    </div>
+    <div id="impList" style="margin-top:10px"></div>
+    <div id="impProg" style="display:none;margin-top:10px"></div>
+    <div id="impResult" style="margin-top:10px"></div>
+    <div id="impActions" style="display:flex;gap:8px;margin-top:10px"></div>
+    <div class="muted" style="font-size:11.5px;margin-top:12px;line-height:1.7">
+      📌 <b>两种导入方式</b><br>
+      ① <b>文字版 PDF</b>：浏览器本地自动提取，数据不出本机，提取完可预览确认后入库<br>
+      ② <b>扫描件 / 照片 / 复杂格式</b>：本地无法可靠识别时，会提示你把文件发给我，由我逐页解析（更准）
+    </div>
+  </div>
+  <div class="card">
+    <h2><span class="t"><span class="bar"></span>手动补录</span></h2>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">少量数值或导入遗漏项，可在此逐项补录</div>
     <div class="row">
       <div class="field"><label>检查日期</label><input type="date" id="labDate"></div>
       <div class="field"><label>指标</label><select id="labKey"></select></div>
@@ -707,11 +741,386 @@ function addLab(){
   const k=document.getElementById('labKey').value;
   const v=+document.getElementById('labVal').value;
   if(!v&&v!==0) return toast('请输入数值');
+  // 重复校验：同日同项
+  if(DB.labs[d] && DB.labs[d][k]!=null){
+    return toast(`⚠️ ${d} 已存在「${META[k].n}」，未写入（如需修改请先删除旧记录）`);
+  }
   DB.labs[d]=DB.labs[d]||{};
   DB.labs[d][k]=v;
   DB.logs.unshift({type:'lab',date:d,ts:Date.now(),key:k,v:v});
   save(); document.getElementById('labVal').value='';
-  drawChart(); renderLogs(); toast('已添加到趋势图');
+  drawChart(); renderLogs(); toast('已添加');
+}
+
+/* ==================== 报告导入（OCR） ==================== */
+let impFiles=[];       // 已选文件
+let impParsed=[];      // 解析结果 [{date,key,v,src}]
+let ocrWorker=null;
+
+/* 指标别名表：用于在 OCR 文本中定位 */
+const ALIAS={
+  crea:['肌酐','CREA','Crea'],
+  egfr:['eGFR','肾小球滤过率','GFR'],
+  urea:['尿素','UREA'],
+  cysc:['胱抑素','CysC'],
+  ua:['尿酸','UA'],
+  malb:['尿微量白蛋白','mALB','微量白蛋白'],
+  acr:['白蛋白/肌酐','ACR','白蛋白肌酐比'],
+  upro:['24h尿蛋白','24小时尿蛋白','尿蛋白定量','UTP'],
+  k:['血钾','钾'],
+  ca:['血钙','钙'],
+  p:['无机磷','血磷'],
+  pth:['甲状旁腺素','PTH'],
+  hgb:['血红蛋白','HGB'],
+  alb:['白蛋白','ALB'],
+  hco3:['碳酸氢盐','CO2'],
+  tc:['总胆固醇','CHOL'],
+  tg:['甘油三酯','TG'],
+  ldl:['低密度脂蛋白','LDL'],
+};
+
+/* 排除词：防止别名误匹配到其他指标行（如"肌酐"误命中"白蛋白/肌酐"） */
+const EXCL={
+  crea:['白蛋白','ACR','尿','胱抑素'],
+  alb:['微量','/肌酐','ACR','总蛋白','球蛋白'],
+  ca:['离子','磷'],
+  p:['PTH','甲旁'],
+  k:['钠','氯','钙'],
+  ua:['ACR','比'],
+  tc:['甘油','LDL','HDL','低密度','高密度'],
+  tg:['LDL','HDL','胆固'],
+  ldl:['HDL','高密度'],
+  egfr:['胱抑素'],
+};
+
+/* ---------- 进度 UI ---------- */
+function impProgress(msg,pct){
+  const el=document.getElementById('impProg');
+  el.style.display='block';
+  el.innerHTML=`<div style="background:#f2f6f9;border-radius:10px;padding:10px 12px;font-size:12.5px">
+    <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+      <span>${msg}</span><span style="color:#7b8794">${pct}%</span></div>
+    <div style="height:5px;background:#dde5ec;border-radius:3px;overflow:hidden">
+      <div style="height:100%;width:${pct}%;background:#1287b8;transition:width .3s"></div></div>
+  </div>`;
+}
+function impProgressHide(){ document.getElementById('impProg').style.display='none'; }
+
+/* ---------- 文件选择 ---------- */
+function initImport(){
+  const zone=document.getElementById('impZone');
+  const input=document.getElementById('impFile');
+  if(!zone||!input) return;
+  zone.addEventListener('click',()=>input.click());
+  input.addEventListener('change',e=>{
+    impFiles=[...e.target.files];
+    renderImpList();
+    if(impFiles.length) parseReports();
+  });
+}
+function renderImpList(){
+  const el=document.getElementById('impList');
+  if(!impFiles.length){ el.innerHTML=''; return; }
+  el.innerHTML=impFiles.map((f,i)=>`
+    <div class="imp-file">
+      <span>📎</span>
+      <span class="fn">${f.name}</span>
+      <span class="muted" style="font-size:11px">${(f.size/1024).toFixed(0)}KB</span>
+      <span class="rm" onclick="removeImp(${i})">✕</span>
+    </div>`).join('');
+  document.getElementById('impState').textContent=`已选 ${impFiles.length} 个文件`;
+}
+function removeImp(i){
+  impFiles.splice(i,1); renderImpList();
+  if(!impFiles.length) clearImp();
+}
+
+/* ---------- 加载第三方库（按需） ---------- */
+function loadScript(src){
+  return new Promise((res,rej)=>{
+    if([...document.scripts].some(s=>s.src===src)) return res();
+    const s=document.createElement('script');
+    s.src=src; s.onload=res; s.onerror=()=>rej(new Error('加载失败: '+src));
+    document.head.appendChild(s);
+  });
+}
+
+/* ---------- 核心：解析报告 ---------- */
+async function parseReports(){
+  const res=document.getElementById('impResult');
+  const act=document.getElementById('impActions');
+  res.innerHTML=''; act.innerHTML='';
+  impParsed=[];
+
+  impProgress('加载识别引擎…',5);
+  try{
+    await loadScript('vendor/pdf.min.js');
+    await loadScript('vendor/tesseract.min.js');
+  }catch(e){
+    impProgressHide();
+    res.innerHTML=`<div class="imp-dup"><b>⚠️ 识别引擎加载失败</b><br>
+      请确认通过网页服务访问本页（而非双击打开文件），或把报告直接发给我处理。</div>`;
+    return;
+  }
+
+  // pdf.js worker
+  if(window.pdfjsLib){
+    pdfjsLib.GlobalWorkerOptions.workerSrc='vendor/pdf.worker.min.js';
+  }
+
+  try{
+    impProgress('初始化中文识别…',10);
+    // worker(blob URL) 内相对路径会失效，全部转绝对路径
+    const BASE=new URL('vendor/', location.href).href;
+    // 90 秒超时兜底：引擎初始化失败时引导转 AI 处理
+    const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('初始化超时')),ms))]);
+    const worker=await withTimeout(Tesseract.createWorker('chi_sim',1,{
+      logger:m=>{
+        if(m.status==='recognizing text'){
+          const p=10+Math.round(m.progress*80);
+          impProgress('正在识别文字…',Math.min(p,92));
+        }
+      },
+      workerPath:BASE+'tesseract-worker.min.js',
+      corePath:BASE,
+      langPath:BASE,
+    }),90000);
+
+    const total=impFiles.length;
+    let idx=0;
+    for(const f of impFiles){
+      idx++;
+      impProgress(`识别第 ${idx}/${total} 个文件：${f.name}`, 10);
+      const images=await fileToImages(f);
+      if(!images.length){ continue; }
+      let fullText='';
+      for(let i=0;i<images.length;i++){
+        if(images.length>1){
+          impProgress(`第 ${idx}/${total} 个 · 第 ${i+1}/${images.length} 页`, 10+Math.round((i/images.length)*80));
+        }
+        const r=await worker.recognize(images[i]);
+        fullText += '\n' + (r.data.text||'');
+      }
+      extractFromText(fullText, f.name);
+    }
+    await worker.terminate();
+
+    impProgress('识别完成，正在提取指标…',96);
+    setTimeout(()=>{ impProgressHide(); renderImpResult(); },300);
+
+  }catch(e){
+    impProgressHide();
+    res.innerHTML=`<div class="imp-dup"><b>⚠️ 识别过程出错</b><br>
+      ${e.message||'未知错误'}<br><br>建议把报告直接发给我，我帮你处理。</div>`;
+  }
+}
+
+/* 文件 → 图片数组（PDF 渲染为 canvas，图片直接读） */
+async function fileToImages(file){
+  const isPdf=/\.pdf$/i.test(file.name)||file.type==='application/pdf';
+  if(!isPdf){
+    return [await fileToDataURL(file)];
+  }
+  const buf=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+  const out=[];
+  const maxPages=Math.min(pdf.numPages, 30);
+  for(let p=1;p<=maxPages;p++){
+    const page=await pdf.getPage(p);
+    const vp=page.getViewport({scale:2.0});
+    const canvas=document.createElement('canvas');
+    canvas.width=vp.width; canvas.height=vp.height;
+    const ctx=canvas.getContext('2d');
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    await page.render({canvasContext:ctx,viewport:vp}).promise;
+    out.push(canvas.toDataURL('image/png'));
+  }
+  return out;
+}
+function fileToDataURL(file){
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=()=>res(r.result);
+    r.onerror=rej;
+    r.readAsDataURL(file);
+  });
+}
+
+/* 从 OCR 文本提取日期与指标值 */
+function extractFromText(text, src){
+  if(!text||text.trim().length<10) return;
+
+  // OCR 归一化：中文字间空格去除、小数点后空格修复
+  let t=text;
+  t=t.replace(/(\d)\.\s+(\d)/g,'$1.$2');                       // 33. 20 → 33.20
+  t=t.replace(/([\u4e00-\u9fa5（）：:/－-])\s+(?=[\u4e00-\u9fa5（）：:/－-])/g,'$1'); // 中文间空格
+  t=t.replace(/([\u4e00-\u9fa5])\s+(?=\d)/g,'$1');             // 中文+数字
+  t=t.replace(/(\d)\s+(?=[\u4e00-\u9fa5])/g,'$1');             // 数字+中文
+
+  const date=findDate(t);
+
+  // 逐行扫描，提升准确率：优先取指标名同行的数值
+  const lines=t.split(/[\n\r]+/).map(l=>l.trim()).filter(Boolean);
+
+  for(const key of Object.keys(ALIAS)){
+    if(!META[key]) continue;
+    if(impParsed.some(x=>x.key===key&&x.date===date)) continue;
+    const aliases=ALIAS[key];
+    let val=null;
+    for(const line of lines){
+      const hit=aliases.find(a=>line.includes(a));
+      if(!hit) continue;
+      // 排除词保护
+      if((EXCL[key]||[]).some(x=>line.includes(x))) continue;
+      // 该行内的数字（排除指标名里的数字）
+      const seg=line.slice(line.indexOf(hit)+hit.length);
+      const nums=[...seg.matchAll(/-?\d+(?:\.\d+)?/g)].map(m=>parseFloat(m[0]));
+      if(!nums.length) continue;
+      // 取第一个在合理范围的数
+      for(const n of nums){
+        if(!isFinite(n)) continue;
+        if(n>20000) continue;
+        val=n; break;
+      }
+      if(val!=null) break;
+    }
+    if(val!=null){
+      impParsed.push({date:date||'',key,v:val,src});
+    }
+  }
+}
+
+/* 从文本里找检查日期 */
+function findDate(text){
+  const pats=[
+    /(20\d{2})\s*[-年\/.]\s*(\d{1,2})\s*[-月\/.]\s*(\d{1,2})/,
+    /(\d{1,2})\s*[-\/]\s*(\d{1,2})\s*[-\/]\s*(20\d{2})/,
+  ];
+  for(let pi=0;pi<pats.length;pi++){
+    const m=text.match(pats[pi]);
+    if(m){
+      let y,mo,d;
+      if(pi===0){ y=m[1]; mo=m[2]; d=m[3]; }
+      else { y=m[3]; mo=m[1]; d=m[2]; }
+      const mi=+mo, di=+d;
+      if(mi>=1&&mi<=12&&di>=1&&di<=31){
+        return `${y}-${String(mi).padStart(2,'0')}-${String(di).padStart(2,'0')}`;
+      }
+    }
+  }
+  return null;
+}
+
+/* ---------- 展示解析结果 + 重复校验 ---------- */
+function renderImpResult(){
+  const res=document.getElementById('impResult');
+  const act=document.getElementById('impActions');
+
+  if(!impParsed.length){
+    res.innerHTML=`<div class="imp-dup"><b>⚠️ 未能识别出有效指标</b><br>
+      可能原因：图片清晰度不足、报告版式特殊、或识别结果与已知指标名不匹配。<br><br>
+      <b>建议</b>：把报告直接发给我（在对话里上传），我逐页人工核对，准确率更高。</div>`;
+    act.innerHTML='';
+    return;
+  }
+
+  const noDate=impParsed.filter(p=>!p.date);
+
+  // 重复检测：同一日期 + 同一指标
+  const dups=[], fresh=[], seen=new Set();
+  for(const p of impParsed){
+    if(!p.date) continue;
+    const sig=p.date+'|'+p.key;
+    const has=DB.labs[p.date]&&DB.labs[p.date][p.key]!=null;
+    if(has||seen.has(sig)){
+      dups.push({...p, old: DB.labs[p.date]?DB.labs[p.date][p.key]:null});
+    }else{
+      seen.add(sig); fresh.push(p);
+    }
+  }
+
+  let html='';
+
+  // 有重复 → 停止导入
+  if(dups.length){
+    html+=`<div class="imp-dup">
+      <b>⚠️ 检测到 ${dups.length} 项重复，已停止导入</b>
+      <div style="margin-top:7px;font-size:12px;line-height:1.8">
+      ${dups.slice(0,10).map(d=>`· <b>${d.date}</b> ${META[d.key].n}：档案已有 <b>${d.old!=null?d.old:'（重复项）'}</b>，本次识别 ${d.v}`).join('<br>')}
+      ${dups.length>10?`<br>…另有 ${dups.length-10} 项`:''}
+      </div>
+      <div style="margin-top:9px;font-size:11.5px;color:#7b8794;line-height:1.6">
+      为避免覆盖已核实的记录，<b>本次不会写入任何数据</b>。<br>
+      如需更新已有数值，请告诉我具体哪一项，我核对后处理。</div>
+    </div>`;
+    res.innerHTML=html;
+    act.innerHTML=`<button class="btn ghost" onclick="clearImp()">关闭</button>`;
+    return;
+  }
+
+  if(noDate.length){
+    html+=`<div class="imp-dup"><b>⚠️ ${noDate.length} 项未识别出检查日期</b>，这些项无法入库（需要日期才能放到趋势图上）。<br>
+      <span style="font-size:11.5px;color:#7b8794">可先在上方「手动补录」里补上，或告诉我日期我帮你处理。</span></div>`;
+  }
+
+  if(fresh.length){
+    const byDate={};
+    fresh.forEach(p=>{ (byDate[p.date]=byDate[p.date]||[]).push(p); });
+    html+=`<div class="imp-ok"><b>✅ 识别到 ${fresh.length} 项新指标</b>
+      <div style="margin-top:7px;font-size:12px;line-height:1.85">
+      ${Object.keys(byDate).sort().map(d=>
+        `<div><b>${d}</b>：${byDate[d].map(p=>`${META[p.key].n} <b style="color:#1a9e63">${p.v}</b>`).join('、')}</div>`
+      ).join('')}
+      </div>
+      <div style="margin-top:8px;font-size:11.5px;color:#7b8794">
+      ⚠️ OCR 识别可能存在偏差，请先核对数值再写入。</div>
+    </div>`;
+  }
+
+  res.innerHTML=html;
+  act.innerHTML = fresh.length
+    ? `<button class="btn" onclick="confirmImport()">确认写入 ${fresh.length} 项</button>
+       <button class="btn ghost" onclick="clearImp()">取消</button>`
+    : `<button class="btn ghost" onclick="clearImp()">关闭</button>`;
+  window._fresh=fresh;
+}
+
+/* ---------- 确认写入 ---------- */
+function confirmImport(){
+  const fresh=window._fresh||[];
+  if(!fresh.length) return;
+  // 二次校验防并发/重复点击
+  const conflict=fresh.filter(p=>DB.labs[p.date]&&DB.labs[p.date][p.key]!=null);
+  if(conflict.length){
+    toast('⚠️ 检测到重复数据，已停止写入');
+    return;
+  }
+  fresh.forEach(p=>{
+    DB.labs[p.date]=DB.labs[p.date]||{};
+    DB.labs[p.date][p.key]=p.v;
+    DB.logs.unshift({type:'lab',date:p.date,ts:Date.now(),key:p.key,v:p.v});
+  });
+  save();
+  document.getElementById('impResult').innerHTML=
+    `<div class="imp-ok"><b>✅ 已写入 ${fresh.length} 项指标</b><br>
+     <span style="font-size:12px;color:#51606f">趋势图已更新。如需同步到线上档案，请告诉我。</span></div>`;
+  document.getElementById('impActions').innerHTML=`<button class="btn ghost" onclick="clearImp()">完成</button>`;
+  impFiles=[]; impParsed=[];
+  document.getElementById('impFile').value='';
+  document.getElementById('impList').innerHTML='';
+  document.getElementById('impState').textContent='';
+  drawChart(); renderLogs();
+  toast(`已导入 ${fresh.length} 项`);
+}
+
+function clearImp(){
+  impParsed=[]; impFiles=[];
+  document.getElementById('impResult').innerHTML='';
+  document.getElementById('impActions').innerHTML='';
+  document.getElementById('impList').innerHTML='';
+  document.getElementById('impState').textContent='';
+  document.getElementById('impFile').value='';
+  impProgressHide();
 }
 
 /* ==================== 用药页 ==================== */
@@ -847,7 +1256,7 @@ document.getElementById('pwd').addEventListener('keydown',e=>{ if(e.key==='Enter
 function initApp(){
   document.getElementById('labDate').value=today();
   document.getElementById('labKey').innerHTML=ORDER.map(k=>`<option value="${k}">${META[k].n}</option>`).join('');
-  renderHome(); renderLogs(); renderKSym(); renderKnow();
+  renderHome(); renderLogs(); renderKSym(); renderKnow(); initImport();
 }
 window.addEventListener('resize',()=>{ chart&&chart.resize(); });
 </script>
