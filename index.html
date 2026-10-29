@@ -25,7 +25,7 @@ window.__echartsReady=new Promise(function(res){
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
-background:var(--bg);color:var(--txt);font-size:15px;line-height:1.6;padding-bottom:78px}
+background:var(--bg);color:var(--txt);font-size:15px;line-height:1.6;padding-bottom:calc(78px + env(safe-area-inset-bottom))}
 .app{max-width:820px;margin:0 auto;padding:0 14px}
 header{background:linear-gradient(135deg,#0b4f6e,#1287b8 60%,#17a2c4);
 color:#fff;padding:20px 18px 22px;border-radius:0 0 22px 22px;margin-bottom:16px;box-shadow:0 6px 20px rgba(11,79,110,.25)}
@@ -130,12 +130,14 @@ padding:10px 12px;font-size:13px}
 padding:10px 12px;font-size:13px;margin-top:8px}
 /* 核对时的操作条：固定在底栏上方，滚到哪都能点 */
 .imp-actions{display:flex;gap:8px;margin-top:10px}
-.imp-actions.fixed{position:fixed;left:0;right:0;bottom:56px;z-index:48;margin:0 auto;
+.imp-actions.fixed{position:fixed;left:0;right:0;bottom:calc(56px + env(safe-area-inset-bottom));z-index:48;margin:0 auto;
 max-width:820px;padding:8px 14px;background:rgba(255,255,255,.97);
 -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
 border-top:1px solid var(--line);box-shadow:0 -5px 16px rgba(20,40,60,.07);gap:9px}
 .imp-actions.fixed .btn{flex:1 1 0;width:auto;padding:10px 10px;font-size:14px;white-space:nowrap}
-body.with-impbar{padding-bottom:150px}
+body.with-impbar{padding-bottom:calc(150px + env(safe-area-inset-bottom))}
+/* 核对操作条出现时把提示消息上移，避免挡住按钮 */
+body.with-impbar .toast{bottom:calc(170px + env(safe-area-inset-bottom))}
 .ci-cancel{color:#93a1b0;font-size:11.5px;text-decoration:underline;cursor:pointer}
 .imp-warn b{color:#a06a12}
 .imp-warn>b{color:#a06a12}
@@ -153,6 +155,11 @@ border-bottom:1px dotted #eceff3}
 font-family:inherit;font-size:12.5px;font-weight:700;color:#3d4b59;padding:0 1px 1px;outline:none;
 border-radius:0;flex:0 0 auto}
 .ci-in:focus{border-bottom:1px solid var(--pri2);background:#eef5fd}
+/* 手改后仍与历史差距过大：底色提醒复核 */
+.ci-row.warn .ci-in{background:#fff8e6;border-bottom-color:#e0a33c}
+/* 核对时可直接修正报告日期 */
+.ci-date{width:auto;flex:0 0 auto;padding:2px 7px;font-size:12px;border-radius:8px;
+background:#f5f9fc;border:1px solid #dbe3ea;color:#3d4b59;font-weight:600}
 .ci-row.hi .ci-in{color:#d93a3a}
 .ci-row.lo .ci-in{color:#0b6e99}
 .ci-u{color:#9aa7b4;font-size:10px;flex:0 0 34px;overflow:hidden;white-space:nowrap}
@@ -164,7 +171,8 @@ font-size:11.5px;color:#8a5a5a;margin-top:8px;line-height:1.65}
 .ci-un b{color:#d93a3a}
 /* ==== 底栏 ==== */
 nav{position:fixed;left:0;right:0;bottom:0;background:rgba(255,255,255,.96);backdrop-filter:blur(12px);
-border-top:1px solid var(--line);display:flex;max-width:820px;margin:0 auto;padding:7px 0 8px;z-index:50}
+border-top:1px solid var(--line);display:flex;max-width:820px;margin:0 auto;
+padding:7px 0 calc(8px + env(safe-area-inset-bottom));z-index:50}
 nav div{flex:1;text-align:center;font-size:10.5px;color:#93a1b0;cursor:pointer;transition:.15s}
 nav div .i{font-size:19px;display:block;line-height:1.25}
 nav div.on{color:var(--pri2);font-weight:600}
@@ -184,6 +192,7 @@ font-size:12.5px;line-height:1.9;padding:1px 0}
 .rpt-row .r{color:#9aa7b4;font-size:10.5px;margin-left:5px}
 .rpt-row.norm{opacity:.72}
 .rpt-more{margin-top:5px}
+.rpt-del{flex:0 0 auto;padding:2px 9px;font-size:11px;color:#d93a3a;border-color:#f0cfcf}
 .list-item{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);font-size:13.5px}
 .list-item:last-child{border-bottom:none}
 .list-item .dt{color:var(--muted);font-size:12px;flex:0 0 74px;padding-top:1px}
@@ -439,8 +448,11 @@ const DEFAULT={
   logs:[], meds:{}, visits:[], labs:{}, syms:{}, abn:{}, rpt:{}
 };
 function load(){
-  try{ const d=JSON.parse(localStorage.getItem(KEY)); return d?Object.assign({},DEFAULT,d):JSON.parse(JSON.stringify(DEFAULT)); }
-  catch(e){ return JSON.parse(JSON.stringify(DEFAULT)); }
+  // DEFAULT 里的数组/对象必须深拷贝，否则 Object.assign 会把引用共享出去，
+  // 改动 DB.logs 会顺带改掉 DEFAULT，下次 load 时默认值已被污染
+  const blank=()=>JSON.parse(JSON.stringify(DEFAULT));
+  try{ const d=JSON.parse(localStorage.getItem(KEY)); return d?Object.assign(blank(),d):blank(); }
+  catch(e){ return blank(); }
 }
 function save(){ localStorage.setItem(KEY, JSON.stringify(DB)); }
 let DB=load();
@@ -531,10 +543,14 @@ const KNOW=[
 
 /* ==================== 工具 ==================== */
 function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),1800)}
+/* 用户输入要进 innerHTML 的地方统一转义，避免备注里的尖括号被当成标签 */
+function esc(s){
+  return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+/* 最新一次记录：历史密文数据 + 本地补录/导入合并后取日期最大的一条 */
 function last(key){
-  const h=HISTORY[key];
-  if(!h||!h.length) return null;
-  return h[h.length-1];
+  const h=seriesOf(key);
+  return h.length?h[h.length-1]:null;
 }
 function statusOf(key,v){
   const m=META[key]; if(!m) return 'ok';
@@ -568,12 +584,12 @@ function renderHome(){
   const rems=[];
   const k=last('k'), crea=last('crea'), egfr=last('egfr'), upro=last('upro'), pth=last('pth'), ua=last('ua');
   if(k && k.v>=5.0) rems.push({c:'r',ic:'⚠️',t:`<b>血钾 ${k.v} 接近上限</b>（参考≤5.3）。限制高钾食物，尽快复查血钾，若出现心慌、无力立即就医。`});
-  if(crea && last('egfr') && egfr.v<25) rems.push({c:'r',ic:'📉',t:`<b>eGFR ${egfr.v}</b>，处于4期下段。注意避免感染、脱水与肾毒性药物，任何腹泻发热都要及时联系医生。`});
+  if(egfr && crea && egfr.v<25) rems.push({c:'r',ic:'📉',t:`<b>eGFR ${egfr.v}</b>，处于4期下段。注意避免感染、脱水与肾毒性药物，任何腹泻发热都要及时联系医生。`});
   if(upro && upro.v>1) rems.push({c:'a',ic:'🧪',t:`<b>24h尿蛋白 ${upro.v}g</b> 仍属大量蛋白尿，严格限盐（&lt;5g/天）是当下最有效的自控手段。`});
   if(pth && pth.v>80) rems.push({c:'a',ic:'🦴',t:`<b>PTH ${pth.v} 偏高</b>，提示骨代谢紊乱，需复查钙磷并咨询是否需要维生素D治疗。`});
   // 复查提醒
   const v=DB.visits.filter(x=>x.date>=today()).sort((a,b)=>a.date.localeCompare(b.date))[0];
-  if(v){ const d=daysBetween(today(),v.date); if(d<=7) rems.push({c:'a',ic:'📅',t:`<b>${d===0?'今天':d+'天后'}</b>有复查安排：${v.dept||'肾内科'}（${v.date}）`}); }
+  if(v){ const d=daysBetween(today(),v.date); if(d<=7) rems.push({c:'a',ic:'📅',t:`<b>${d===0?'今天':d+'天后'}</b>有复查安排：${esc(v.dept||'肾内科')}（${v.date}）`}); }
   // 甲状腺结节
   rems.push({c:'r',ic:'🔴',t:'<b>甲状腺结节 TI-RADS 4B（6.8mm）</b>需 3-6 个月复查超声，如已超过 6 个月请尽快安排。'});
 
@@ -591,10 +607,11 @@ function renderHome(){
   const cnt=Object.keys(taken).filter(x=>taken[x]).length;
   document.getElementById('medProg').textContent=`${cnt}/${MEDS.length} 已服`;
 
-  // 待办：到期复查
+  // 待办：到期复查（含手动补录/导入的数据）
   const overdue=CHECKS.map(c=>{
-    const h=HISTORY[c.k]; if(!h||!h.length||!c.k||c.k==='-') return null;
-    const l=h[h.length-1]; const d=daysBetween(l.date,today());
+    if(!c.k||c.k==='-') return null;
+    const l=last(c.k); if(!l) return null;
+    const d=daysBetween(l.date,today());
     return d>c.m?{n:c.n,d,last:l.date}:null;
   }).filter(Boolean).slice(0,4);
 
@@ -605,6 +622,10 @@ function renderHome(){
 
   document.getElementById('todayStr').textContent=today();
   const e=last('egfr'); if(e) document.getElementById('hdEgfr').textContent='eGFR '+e.v;
+  // 头部「最近检查」取所有指标里最新的那次日期，之前只写死在 HTML 里不会更新
+  let latest='';
+  Object.keys(META).forEach(key=>{ const l=last(key); if(l&&l.date>latest) latest=l.date; });
+  document.getElementById('hdDate').textContent='最近检查 '+(latest||'—');
 }
 
 function toggleMed(k){
@@ -625,13 +646,17 @@ function addBP(){
   if(s>=140||dd>=90) setTimeout(()=>toast('⚠️ 血压偏高，注意休息并按时服药'),900);
 }
 function addWater(){
-  const c=+document.getElementById('cups').value||1;
+  const raw=document.getElementById('cups').value.trim();
+  // 先解析用户输入再兜底，否则输入 0 会被 `||1` 悄悄改成 1 杯
+  const c=raw===''?1:+raw;
+  if(!isFinite(c)||c<1||c>30) return toast('杯数应在 1-30 之间');
   DB.logs.unshift({type:'water',date:today(),ts:Date.now(),cups:c});
   save(); renderLogs(); toast('饮水已记录');
 }
 function addWeight(){
   const w=+document.getElementById('wt').value;
   if(!w) return toast('请填写体重');
+  if(w<20||w>300) return toast('体重超出合理范围，请检查');
   const e=document.getElementById('edema').value;
   DB.logs.unshift({type:'weight',date:today(),ts:Date.now(),w:w,edema:e});
   save(); document.getElementById('wt').value=''; renderLogs(); toast('体重已记录');
@@ -642,19 +667,24 @@ function addNote(){
   DB.logs.unshift({type:'note',date:today(),ts:Date.now(),txt:t});
   save(); document.getElementById('noteTxt').value=''; renderLogs(); toast('已保存');
 }
+let logLimit=20;                 // 近期记录默认 20 条，可继续加载更早的
+function moreLogs(){ logLimit+=20; renderLogs(); }
 function renderLogs(){
   const el=document.getElementById('logList');
-  const arr=DB.logs.slice(0,20);
+  const arr=DB.logs.slice(0,logLimit);
   if(!arr.length){ el.innerHTML='<div class="empty">还没有记录，从上面开始记录吧</div>'; return; }
   el.innerHTML=arr.map(l=>{
     let c='';
     if(l.type==='bp'){ const hi=(l.sbp>=140||l.dbp>=90); c=`血压 <span class="bp ${hi?'hi':''}">${l.sbp}/${l.dbp}</span> mmHg${l.hr?' · 心率 '+l.hr:''}${hi?' <span class="badge" style="background:#fdeaea;color:#d93a3a">偏高</span>':''}`; }
     if(l.type==='water') c=`饮水 ${l.cups} 杯`;
     if(l.type==='weight') c=`体重 ${l.w} kg${l.edema&&l.edema!=='无'?' · 水肿：'+l.edema:''}`;
-    if(l.type==='note') c=l.txt;
+    if(l.type==='note') c=esc(l.txt);
     if(l.type==='lab') c=`${META[l.key]?META[l.key].n:l.key} = ${l.v}`;
     return `<div class="list-item"><div class="dt">${dateStr(l.date)}</div><div>${c}</div></div>`;
-  }).join('');
+  }).join('')
+  + (DB.logs.length>logLimit
+      ? `<div style="text-align:center;margin-top:10px"><button class="mini" onclick="moreLogs()">显示更多（还有 ${DB.logs.length-logLimit} 条）</button></div>`
+      : '');
   // 饮水统计
   const w=DB.logs.filter(x=>x.type==='water'&&x.date===today()).reduce((s,x)=>s+x.cups,0);
   document.getElementById('waterToday').textContent=`今日 ${w} 杯`;
@@ -683,15 +713,16 @@ function toggleKey(k){
 }
 function clearSel(){ selKeys=['egfr']; renderSeg(); drawChart(); toast('已重置为 eGFR'); }
 
-/* 取某指标全部数据（历史 + 用户录入） */
+/* 取某指标全部数据（历史 + 用户录入/导入）。同一日期只保留一条：
+   本地补录与导入的值以较晚写入的 DB.labs 为准，否则图上点与提示会不一致 */
 function seriesOf(k){
-  const base=(HISTORY[k]||[]).slice();
+  const map=new Map();
+  (HISTORY[k]||[]).forEach(x=>{ if(x&&x.date) map.set(x.date,{date:x.date,v:x.v}); });
   Object.keys(DB.labs||{}).forEach(d=>{
     const rec=DB.labs[d];
-    if(rec&&rec[k]!=null) base.push({date:d,v:rec[k]});
+    if(rec&&rec[k]!=null) map.set(d,{date:d,v:rec[k]});
   });
-  base.sort((a,b)=>a.date.localeCompare(b.date));
-  return base;
+  return [...map.values()].sort((a,b)=>a.date.localeCompare(b.date));
 }
 
 function drawChart(){
@@ -716,14 +747,19 @@ function drawChart(){
   });
 
   // 归一化：按该指标自身的最小/最大映射到 0-100
+  // 没有数据的指标也要返回同样结构（data/raw），否则下面的 normed[i].raw 会直接报错
   function norm(arr){
     const vs=arr.filter(v=>v!=null);
-    if(!vs.length) return arr.map(()=>null);
-    let lo=Math.min(...vs), hi=Math.max(...vs);
+    const rlo=vs.length?Math.min(...vs):0, rhi=vs.length?Math.max(...vs):1;
+    let lo=rlo, hi=rhi;
     if(hi===lo){ lo=lo*0.9||0; hi=hi*1.1||1; }
     const pad=(hi-lo)*0.12;
     lo-=pad; hi+=pad;
-    return {data:arr.map(v=> v==null?null: +(((v-lo)/(hi-lo))*100).toFixed(1)), lo, hi, raw:{lo:Math.min(...vs),hi:Math.max(...vs)}};
+    return {
+      data:arr.map(v=> v==null?null: +(((v-lo)/(hi-lo))*100).toFixed(1)),
+      raw:{lo:rlo,hi:rhi},
+      empty:!vs.length
+    };
   }
   const normed=useNorm? aligned.map(a=>norm(a)) : null;
 
@@ -803,7 +839,10 @@ function drawChart(){
     note.className='axis-note on';
     note.innerHTML=`<b>归一化对比模式</b>：${keys.length} 个指标数值量级不同，纵轴已按各自的最小-最大值换算为 0-100% 相对变化，` +
       `用于观察<b>变化趋势是否同步</b>。<br>图上标注与悬停提示均为<b>真实数值</b>。` +
-      `<br>范围：` + keys.map((k,i)=>`<span style="color:${COLORS[i%COLORS.length]}">●</span> ${META[k].n} ${normed[i].raw.lo}~${normed[i].raw.hi}`).join('；');
+      `<br>范围：` + keys.map((k,i)=>{
+        const n=normed[i];
+        return `<span style="color:${COLORS[i%COLORS.length]}">●</span> ${META[k].n} ${n.empty?'无数据':n.raw.lo+'~'+n.raw.hi}`;
+      }).join('；');
   }else if(useDual){
     note.className='axis-note on';
     note.innerHTML=`<b>双轴模式</b>：<span style="color:${COLORS[0]}">■ 左轴</span> ${META[keys[0]].n}（${META[keys[0]].u}）；
@@ -828,15 +867,16 @@ function addLab(){
   const k=document.getElementById('labKey').value;
   const v=+document.getElementById('labVal').value;
   if(!v&&v!==0) return toast('请输入数值');
-  // 重复校验：同日同项
+  // 同日同项已存在时允许覆盖，不再提示「先删除旧记录」——页面里并没有删除入口
   if(DB.labs[d] && DB.labs[d][k]!=null){
-    return toast(`⚠️ ${d} 已存在「${META[k].n}」，未写入（如需修改请先删除旧记录）`);
+    if(!confirm(`${d} 已有「${META[k].n}」= ${DB.labs[d][k]}，是否用 ${v} 覆盖？`)) return;
+    DB.logs=DB.logs.filter(x=>!(x.type==='lab'&&x.date===d&&x.key===k));
   }
   DB.labs[d]=DB.labs[d]||{};
   DB.labs[d][k]=v;
   DB.logs.unshift({type:'lab',date:d,ts:Date.now(),key:k,v:v});
   save(); document.getElementById('labVal').value='';
-  drawChart(); renderLogs(); toast('已添加');
+  drawChart(); renderLogs(); renderHome(); renderVisit(); toast('已添加');
 }
 
 /* ==================== 报告导入（OCR） ==================== */
@@ -845,6 +885,8 @@ let impParsed=[];      // 解析结果 [{date,key,v,src}]
 let impRpt=[];         // 本次解析出的整份报告 [{date,src,items,max,missing}]
 let impOrphan=0;       // 有异常箭头但数值未识别的行数
 let impSeqMiss=0, impSeqMax=0;   // 序号缺口（漏识别项）
+let impLowConf=0;      // 整页平均置信度偏低的页数
+let impWorker=null, impRunId=0;  // 正在跑的 OCR worker / 本次解析编号（用于取消旧任务）
 let ocrWorker=null;
 
 /* 指标别名表：用于在 OCR 文本中定位 */
@@ -940,10 +982,15 @@ function loadScript(src){
 
 /* ---------- 核心：解析报告 ---------- */
 async function parseReports(){
+  // 每次解析分配一个编号；用户中途重选文件时，旧任务会自行退出并释放 worker
+  const run=++impRunId;
+  if(impWorker){ try{ await impWorker.terminate(); }catch(e){} impWorker=null; }
   const res=document.getElementById('impResult');
   res.innerHTML=''; setImpActions('');
   impDone=false;
-  impParsed=[];
+  // 每次解析都必须清空上一次的累计结果，否则重新选文件会把旧报告一起带进来
+  impParsed=[]; impRpt=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0; impOver={}; impLowConf=0; window._fresh=[];
+  let worker=null;
 
   impProgress('加载识别引擎…',5);
   try{ document.getElementById('impProg').scrollIntoView({block:'center',behavior:'smooth'}); }catch(e){}
@@ -978,7 +1025,6 @@ async function parseReports(){
     }
     const needOcr=jobs.some(j=>j.pages.some(p=>p.imgs&&p.imgs.length));
 
-    let worker=null;
     if(needOcr){
       impProgress('准备识别引擎…',8);
       // worker(blob URL) 内相对路径会失效，全部转绝对路径
@@ -1016,9 +1062,17 @@ async function parseReports(){
       }
       // 保留列间距：后续靠「列首」定位结果值，空格被压缩就定位不到
       try{ await worker.setParameters({preserve_interword_spaces:'1'}); }catch(e){}
+      // 引擎就绪前用户又选了文件：放弃本次，别让两份 OCR 同时跑
+      if(run!==impRunId){ try{ await worker.terminate(); }catch(e){} return; }
+      impWorker=worker;
     }
 
     for(let idx=0;idx<jobs.length;idx++){
+      if(run!==impRunId){
+        if(worker){ try{ await worker.terminate(); }catch(e){} }
+        impWorker=null;
+        return;
+      }
       const job=jobs[idx];
       impProgress(`识别第 ${idx+1}/${jobs.length} 个文件：${job.name}`, 10+Math.round(idx/jobs.length*20));
       let fullText='';
@@ -1031,7 +1085,12 @@ async function parseReports(){
         // 双栏页会拆成左右两张图，各自识别（左右栏互不串行）
         for(const im of (pg.imgs||[])){
           const r=await worker.recognize(im);
-          fullText += '\n' + (r.data.text||'');
+          if(run!==impRunId){ try{ await worker.terminate(); }catch(e){} impWorker=null; return; }
+          if(r&&r.data){
+            // 整页置信度太低时提示人工重点核对（不直接丢行，避免误删真值）
+            if(typeof r.data.confidence==='number'&&r.data.confidence<65) impLowConf++;
+            fullText += '\n' + (r.data.text||'');
+          }
         }
       }
       extractFromText(fullText, job.name);
@@ -1042,11 +1101,12 @@ async function parseReports(){
       if(pr.max>impSeqMax) impSeqMax=pr.max;
       impSeqMiss+=pr.missing;
     }
-    if(worker) await worker.terminate();
+    if(worker){ await worker.terminate(); impWorker=null; }
 
     impProgress('识别完成，正在提取指标…',96);
     impDone=true;
     setTimeout(()=>{
+      if(run!==impRunId) return;           // 已被后一次解析取代
       impProgressHide(); renderImpResult();
       // 结果在页面下方，不滚过去用户根本看不到
       const box=document.getElementById('impResult');
@@ -1054,8 +1114,12 @@ async function parseReports(){
     },300);
 
   }catch(e){
+    // 旧任务被新任务取消时（worker 被 terminate），不要把错误界面覆盖到新任务上
+    if(run!==impRunId) return;
     impDone=true;
     impProgressHide();
+    // 出错时把 OCR worker 收掉，否则它会一直占着内存与线程
+    if(worker){ try{ await worker.terminate(); }catch(err){} worker=null; impWorker=null; }
     const msg=e.message||'未知错误';
     res.innerHTML=/超时/.test(msg)
       ? `<div class="imp-dup"><b>⚠️ 识别引擎没能下载完</b><br>
@@ -1114,7 +1178,9 @@ async function pdfPageText(page){
   let tc;
   try{ tc=await page.getTextContent(); }catch(e){ return ''; }
   const items=(tc.items||[]).filter(it=>it.str&&it.str.trim());
-  if(items.length<20) return '';
+  // 只有少量文字（封面、小结页）不该整页转 OCR；按「含数字的条目数」判断更像化验单
+  const digits=items.filter(it=>/\d/.test(it.str)).length;
+  if(items.length<8||digits<6) return '';
   const rows=[];
   for(const it of items){
     const y=it.transform[5], x=it.transform[4];
@@ -1187,7 +1253,11 @@ function splitColumns(canvas){
 /* 一页 → 一张或多张待识别图（双栏时拆成两张） */
 function pageToImgs(canvas){
   const halves=splitColumns(canvas);
-  return (halves||[canvas]).map(c=>enhanceCanvas(c).toDataURL('image/png'));
+  const list=halves||[canvas];
+  const imgs=list.map(c=>enhanceCanvas(c).toDataURL('image/png'));
+  // 切出来的半页图用完就释放，多页扫描件否则会一直占着几十 MB
+  list.forEach(c=>{ if(c!==canvas){ c.width=0; c.height=0; } });
+  return imgs;
 }
 
 async function fileToImages(file){
@@ -1203,7 +1273,9 @@ async function fileToImages(file){
         const cx=c.getContext('2d');
         cx.fillStyle='#fff'; cx.fillRect(0,0,c.width,c.height);
         cx.drawImage(im,0,0,c.width,c.height);
-        res({imgs:pageToImgs(c)});
+        const imgs=pageToImgs(c);
+        c.width=0; c.height=0;                  // 大图已转成 dataURL，画布可以释放了
+        res({imgs});
       };
       im.onerror=()=>res({imgs:[url]});
       im.src=url;
@@ -1225,6 +1297,7 @@ async function fileToImages(file){
     ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
     await page.render({canvasContext:ctx,viewport:vp}).promise;
     out.push({imgs:pageToImgs(canvas)});
+    canvas.width=0; canvas.height=0;          // 逐页释放，30 页扫描件不至于吃光内存
   }
   return out;
 }
@@ -1448,6 +1521,12 @@ function parseItemLine(body){
     if(f){ raw=v; v=f.v; st='ok'; }
   }
 
+  // 原件自己标了 ↑↓ 就以它为准（各实验室参考区间不同，可能数值在区间内却仍被标异常）
+  if(!raw){
+    const arrow=/[↑↓]/.exec(body.slice(val.start));
+    if(arrow) st=arrow[0]==='↑'?'high':'low';
+  }
+
   let unit='';
   const after=rg?body.slice(rg.end):body.slice(val.end);
   const um=after.match(/^\s*([A-Za-zμµ%][A-Za-z0-9μµ%\/\^\.]{0,11})/);
@@ -1513,8 +1592,10 @@ function parseItems(text){
       if(!it&&!hasRange) continue;                           // 不是化验项，编号也不计入
       seq.add(no);
       if(!it){ failed++; continue; }
-      if(names.has(it.n)) continue;                          // 双栏/多页重复
-      names.add(it.n);
+      // 双栏/多页重复按「序号+名称+单位」判重：同名但序号不同的项（如尿蛋白定性+定量）必须保留
+      const sig=no+'|'+it.n+'|'+(it.u||'');
+      if(names.has(sig)) continue;
+      names.add(sig);
       items.push(it);
     }
   }
@@ -1527,8 +1608,9 @@ function parseItems(text){
     if(!/[\u4e00-\u9fa5]/.test(line)) continue;
     const it=parseItemLine(line);
     if(!it||it.st==='unk') continue;                          // 没区间就分不清名字和数值，宁可不收
-    if(it.n.length<3||names.has(it.n)) continue;
-    names.add(it.n);
+    const sig='x|'+it.n+'|'+(it.u||'');
+    if(it.n.length<3||names.has(sig)) continue;
+    names.add(sig);
     items.push(it);
   }
 
@@ -1551,7 +1633,9 @@ function countOrphanArrows(text){
 
 /* ---------- 记录页：整份化验报告（全部项目） ---------- */
 let rptOpen={};
+let rptAll=false;                 // 报告列表默认只显示最近 8 份，可展开全部
 function toggleRpt(d){ rptOpen[d]=!rptOpen[d]; renderRpt(); }
+function toggleRptAll(){ rptAll=!rptAll; renderRpt(); }
 
 function rptItems(d){
   const r=DB.rpt&&DB.rpt[d];
@@ -1579,11 +1663,11 @@ function renderRpt(){
     const ref=abn&&it.lo!=null?`<span class="r">参考 ${it.lo}-${it.hi}</span>`:'';
     const fx=it.raw?`<span class="r" style="color:#c08a00" title="原件读数 ${it.raw}，按参考区间修正">≈</span>`:'';
     return `<div class="rpt-row${abn?'':' norm'}">
-      <span class="n">${it.n}</span>
-      <span class="v"><b style="color:${col}">${it.v}${fx} ${mark}</b><span class="u"> ${it.u||''}</span>${ref}</span>
+      <span class="n">${esc(it.n)}</span>
+      <span class="v"><b style="color:${col}">${esc(it.v)}${fx} ${mark}</b><span class="u"> ${esc(it.u||'')}</span>${ref}</span>
     </div>`;
   };
-  el.innerHTML=dates.slice(0,8).map(d=>{
+  el.innerHTML=dates.slice(0,rptAll?dates.length:8).map(d=>{
     const items=rptItems(d);
     const abn=items.filter(isAbn);
     const open=!!rptOpen[d];
@@ -1591,12 +1675,32 @@ function renderRpt(){
       <div class="rpt-hd">
         <b>${d}</b>
         <span class="s" style="color:${abn.length?'#d93a3a':'#7b8794'}">${items.length} 项${abn.length?` · ${abn.length} 项异常`:' · 全部在参考范围'}</span>
+        <button class="mini rpt-del" onclick="delRpt('${d}')" title="删除这份报告">删除</button>
       </div>
       ${(open?items:(abn.length?abn:items.slice(0,6))).map(row).join('')}
       ${!abn.length?'<div class="s" style="font-size:11.5px;color:#7b8794">各项均在参考范围内</div>':''}
       ${(open||items.length>(abn.length||6))?`<div class="rpt-more"><button class="mini" onclick="toggleRpt('${d}')">${open?'收起':'展开全部 '+items.length+' 项'}</button></div>`:''}
     </div>`;
-  }).join('') + (dates.length>8?`<div class="muted" style="font-size:11.5px">…另有 ${dates.length-8} 份报告</div>`:'');
+  }).join('') + (dates.length>8
+    ? `<div class="muted" style="font-size:11.5px">…${rptAll?'共':'另有'} ${dates.length} 份报告
+        <button class="mini" style="margin-left:6px" onclick="toggleRptAll()">${rptAll?'只看最近 8 份':'显示全部'}</button></div>`
+    : '');
+}
+
+/* 删除某一天的整份报告：报告项目 + 由它产生的趋势值与日志一起清掉
+   （那天手动补录、且不在这份报告里的指标不动） */
+function delRpt(d){
+  if(!confirm(`删除 ${d} 的整份报告？\n这一天的报告项目和对应趋势数据会一起删除，无法恢复。`)) return;
+  const keys=new Set(rptItems(d).map(it=>keyOfName(it.n)).filter(k=>k&&META[k]));
+  if(DB.rpt&&DB.rpt[d]!=null) delete DB.rpt[d];
+  if(DB.labs&&DB.labs[d]){
+    keys.forEach(k=>{ delete DB.labs[d][k]; });
+    if(!Object.keys(DB.labs[d]).length) delete DB.labs[d];
+  }
+  DB.logs=(DB.logs||[]).filter(l=>!(l.type==='lab'&&l.date===d&&keys.has(l.key)));
+  delete rptOpen[d];
+  save(); renderRpt(); renderHome(); drawChart(); renderVisit();
+  toast('已删除该报告');
 }
 
 /* 从文本里找检查日期 */
@@ -1646,6 +1750,24 @@ function impSuspect(p){
   return p.v>rh*50 || (rl>0&&p.v<rl*0.02);
 }
 
+/* 项目名 → 追踪指标 key：把核对表里（可能被手改过）的值同步回趋势图时用 */
+function keyOfName(n){
+  const nm=String(n||'').replace(/\s/g,'').toLowerCase();
+  if(!nm) return null;
+  const keys=Object.keys(ALIAS).filter(k=>META[k]);
+  for(const k of keys){
+    if((ALIAS[k]||[]).some(a=>a.toLowerCase()===nm)) return k;
+  }
+  for(const k of keys){
+    if((ALIAS[k]||[]).some(a=>a.length>=2&&nm.includes(a.toLowerCase()))) return k;
+  }
+  return null;
+}
+/* 同名项目按「名称+单位」判等；同名不同单位（如尿蛋白定性/定量）是两项，不能合并 */
+const sameItem=(a,b)=>a.n===b.n&&(a.u||'')===(b.u||'');
+/* 数值+单位+参考区间的签名，用于重复导入比对 */
+const itemSig=x=>[x.v,x.u==null?'':x.u,x.lo==null?'':x.lo,x.hi==null?'':x.hi].join('|');
+
 /* 把本次识别出的多份报告按日期合并 */
 function groupImp(){
   const map=new Map();
@@ -1653,7 +1775,7 @@ function groupImp(){
     const d=r.date||'';
     const g=map.get(d)||{date:d,src:[],items:[],max:0,missing:0};
     for(const it of r.items){
-      if(!g.items.some(x=>x.n===it.n)) g.items.push(it);
+      if(!g.items.some(x=>sameItem(x,it))) g.items.push(it);
     }
     if(r.src&&g.src.indexOf(r.src)<0) g.src.push(r.src);
     if((r.max||0)>g.max) g.max=r.max;
@@ -1672,8 +1794,8 @@ function impDup(){
   for(const g of groupImp()){
     if(!g.date) continue;
     const all=rptItems(g.date);
-    // 只跟「同名项目」比：同一天可能有生化、血常规两份报告，互不算重复
-    const old=all.filter(o=>g.items.some(it=>it.n===o.n));
+    // 只跟「同名同单位项目」比：同一天可能有生化、血常规两份报告，互不算重复
+    const old=all.filter(o=>g.items.some(it=>sameItem(it,o)));
     if(all.length&&!old.length) continue;      // 同日的另一份报告，直接往下走
     if(!all.length){
       // 没有整份报告，但这一天可能手动记过几项指标
@@ -1688,17 +1810,31 @@ function impDup(){
     }
     const chg=[], add=[], del=[];
     for(const it of g.items){
-      const o=old.find(x=>x.n===it.n);
+      const o=old.find(x=>sameItem(x,it));
       if(!o) add.push({n:it.n, now:it.v});
-      else if(String(o.v)!==String(it.v)) chg.push({n:it.n, now:it.v, old:o.v});
+      // 数值、单位、参考区间任一变化都算「不同」：单位从 μmol/L 变 mg/dL 时数值相同也不能当重复
+      else if(itemSig(o)!==itemSig(it)) chg.push({n:it.n, now:it.v, old:o.v});
     }
-    for(const o of old) if(!g.items.some(x=>x.n===o.n)) del.push({n:o.n, old:o.v});
+    for(const o of old) if(!g.items.some(x=>sameItem(x,o))) del.push({n:o.n, old:o.v});
     out.push({date:g.date, oldN:old.length, newN:g.items.length, chg, add, del});
   }
   return out;
 }
 function impOverrideAll(){
   impDup().forEach(d=>{ impOver[d.date]=true; });
+  renderImpResult();
+}
+
+/* 核对时改报告日期：同一组的解析结果与追踪指标一起改到新日期
+   （报告上的日期常被认成打印/采集时间，识别不到时也必须允许手动指定） */
+function impSetDate(gi,val){
+  const g=groupImp()[gi];
+  if(!g) return;
+  const old=g.date||'', d=val||'';
+  if(old===d) return;
+  impRpt.forEach(r=>{ if((r.date||'')===old) r.date=d; });
+  impParsed.forEach(p=>{ if((p.date||'')===old) p.date=d; });
+  delete impOver[old];
   renderImpResult();
 }
 
@@ -1714,12 +1850,12 @@ function restat(it){
 function impRow(di,ii,it){
   const cls=it.st==='high'?' hi':(it.st==='low'?' lo':'');
   const ref=(it.lo!=null&&it.hi!=null)?`<i>${it.lo}-${it.hi}</i>`:'';
-  return `<div class="ci-row${cls}" data-row="${di}_${ii}">
-    <span class="ci-n" title="${it.n} ${it.lo!=null?it.lo+'-'+it.hi:''}">${it.n}${ref}</span>
-    <input class="ci-in" data-k="${di}_${ii}" value="${it.v}" inputmode="decimal"
+  return `<div class="ci-row${cls}${it._warn?' warn':''}" data-row="${di}_${ii}">
+    <span class="ci-n" title="${esc(it.n)} ${it.lo!=null?it.lo+'-'+it.hi:''}">${esc(it.n)}${ref}</span>
+    <input class="ci-in" data-k="${di}_${ii}" value="${esc(it.v)}" inputmode="decimal"
       onchange="impCommit(${di},${ii},this)"
       onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">
-    <span class="ci-u">${it.u||''}</span>
+    <span class="ci-u">${esc(it.u||'')}</span>
     <button class="ci-ok${it._ok?' on':''}" data-ok="${di}_${ii}" onclick="impMark(${di},${ii})"
       title="${it._ok?'已核对，点击取消':'标记为与原件一致'}">${it._ok?'✓':'○'}</button>
   </div>`;
@@ -1727,7 +1863,13 @@ function impRow(di,ii,it){
 
 function impPaint(di,ii,it){
   const row=document.querySelector(`.ci-row[data-row="${di}_${ii}"]`);
-  if(row){ row.classList.toggle('hi',it.st==='high'); row.classList.toggle('lo',it.st==='low'); }
+  if(row){
+    row.classList.toggle('hi',it.st==='high');
+    row.classList.toggle('lo',it.st==='low');
+    row.classList.toggle('warn',!!it._warn);
+    if(it._warn) row.title='这个数值与历史记录差距过大，请对照原件确认';
+    else row.removeAttribute('title');
+  }
   const b=document.querySelector(`.ci-ok[data-ok="${di}_${ii}"]`);
   if(b){ b.classList.toggle('on',!!it._ok); b.textContent=it._ok?'✓':'○'; }
 }
@@ -1747,6 +1889,9 @@ function impCommit(di,ii,el){
     restat(it);
   }
   it._ok=true;                     // 改过即视为已核对
+  // 手改后也做一次合理性检查：5.2 误输成 52 这类要能看出来
+  const k=keyOfName(it.n);
+  it._warn=!!(k&&META[k]&&typeof it.v==='number'&&impSuspect({key:k,v:it.v}));
   el.value=it.v;
   impPaint(di,ii,it); impCheckProgress();
 }
@@ -1796,9 +1941,14 @@ function impCheckProgress(){
   if(go){
     go.textContent=done>=total?`确认导入 ${total} 项`:`还有 ${total-done} 项待核对`;
     go.style.opacity=done>=total?'1':'.55';
+    // 没核对完时主按钮给「全部一致」，核对完才是「确认导入」
+    go.className='btn'+(done>=total?'':' ghost');
   }
   const all=document.getElementById('impAllOk');
-  if(all) all.style.display=done>=total?'none':'';
+  if(all){
+    all.className='btn'+(done>=total?' ghost':'');
+    all.style.display=done>=total?'none':'';
+  }
 }
 
 function impGoFn(){
@@ -1891,7 +2041,11 @@ function renderImpResult(){
     const abn=g.items.filter(isAbn);
     const over=impOver[g.date];
     return `<div class="ci-hd" style="margin-top:14px">
-      <b>${g.date||'日期未识别'}</b>
+      <span style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+        <b>${g.date||'日期未识别'}</b>
+        <input type="date" class="ci-date" value="${g.date||''}" onchange="impSetDate(${gi},this.value)"
+          title="报告日期，识别不对可直接改">
+      </span>
       <span class="ci-pg" style="color:${abn.length?'#d93a3a':'#7b8794'};display:flex;align-items:center;gap:8px">
         <span>${g.items.length} 项${abn.length?` · ${abn.length} 项异常`:' · 全部正常'}${over?' · 覆盖已有':''}</span>
         <button class="mini" onclick="impGroupOk(${gi})">这组一致</button>
@@ -1919,32 +2073,49 @@ function renderImpResult(){
       </div></div>`;
   }
 
-  if(impOrphan||impSeqMiss>2){
+  if(impOrphan||impSeqMiss>2||impLowConf){
     const bits=[];
     if(impSeqMax) bits.push(`报告编号到 ${impSeqMax} 项，其中 <b>${impSeqMiss} 项没整理出结果</b>`);
     if(impOrphan) bits.push(`另有 ${impOrphan} 处异常箭头对应的数值没读准`);
+    if(impLowConf) bits.push(`<b>${impLowConf} 页</b>整体识别置信度偏低（图片模糊或拍照反光）`);
     html+=`<div class="ci-un"><b>这份报告没有读全</b>：${bits.join('；')}。颜色、镜检这类非数值项本来就不会入库；
       其余多为字迹模糊或表格线干扰，请对照原件补一下。</div>`;
   }
 
   res.innerHTML=html;
-  setImpActions(`<button class="btn" id="impGo" style="flex:1.6" onclick="impGoFn()">还有 ${allItems} 项待核对</button>
-    <button class="btn ghost" id="impAllOk" style="flex:1" onclick="impAllOk()">全部一致</button>`);
+  setImpActions(`<button class="btn ghost" id="impGo" style="flex:1.6" onclick="impGoFn()">还有 ${allItems} 项待核对</button>
+    <button class="btn" id="impAllOk" style="flex:1" onclick="impAllOk()">全部一致</button>`);
   window._fresh=fresh;
   impCheckProgress();
 }
 
 /* ---------- 确认写入 ---------- */
 function confirmImport(){
-  const fresh=window._fresh||[];
   const groups=groupImp();
   if(!groups.length) return;
   const {total,done}=impStat();
   if(done<total){ toast(`还有 ${total-done} 项没核对`); return; }
 
+  // 趋势指标以「核对表里的值」为准：用户改过数值后，不能再写回 OCR 原始值
+  const picked=new Map();
+  for(const g of groups){
+    if(!g.date) continue;
+    for(const it of g.items){
+      const k=keyOfName(it.n);
+      if(k&&META[k]) picked.set(g.date+'|'+k,{date:g.date,key:k,v:it.v});
+    }
+  }
+  const fresh=[...picked.values()];
+  // 别名匹配到、但逐项解析没整理出来的指标，仍然保留原值
+  for(const p of (window._fresh||[])){
+    if(p.date&&!picked.has(p.date+'|'+p.key)) fresh.push(p);
+  }
+
   fresh.forEach(p=>{
     DB.labs[p.date]=DB.labs[p.date]||{};
     DB.labs[p.date][p.key]=p.v;
+    // 同一天同一指标只留一条日志，重复导入不堆重复记录
+    DB.logs=DB.logs.filter(l=>!(l.type==='lab'&&l.date===p.date&&l.key===p.key));
     DB.logs.unshift({type:'lab',date:p.date,ts:Date.now(),key:p.key,v:p.v});
   });
 
@@ -1957,9 +2128,9 @@ function confirmImport(){
     for(const it of g.items){
       const save={n:it.n,v:it.v,u:it.u,lo:it.lo,hi:it.hi,st:it.st};
       if(it.raw!=null) save.raw=it.raw;      // 自动修正过的留痕
-      const old=cur.items.find(x=>x.n===it.n);
+      const old=cur.items.find(x=>sameItem(x,it));
       if(old){
-        if(String(old.v)!==String(it.v)||old.st!==it.st){ Object.assign(old,save); updN++; }
+        if(itemSig(old)!==itemSig(it)){ Object.assign(old,save); updN++; }
       }else{
         cur.items.push(save); newN++;
       }
@@ -1980,7 +2151,7 @@ function confirmImport(){
   document.getElementById('impFile').value='';
   document.getElementById('impList').innerHTML='';
   document.getElementById('impState').textContent='';
-  drawChart(); renderLogs(); renderRpt();
+  drawChart(); renderLogs(); renderRpt(); renderHome(); renderVisit();
   toast(`已记录 ${msg.join('、')}`);
 }
 
@@ -1995,6 +2166,7 @@ function clearImp(){
 }
 
 /* ==================== 用药页 ==================== */
+let medChart=null;
 function renderMed(){
   document.getElementById('medFull').innerHTML=MEDS.map(m=>`
     <div class="med"><div class="dot"></div>
@@ -2014,8 +2186,9 @@ function renderMed(){
     data.push(Object.keys(rec).filter(x=>rec[x]).length);
   }
   if(!window.echarts) return;                    // 图表库还在下载
-  const mc=echarts.init(document.getElementById('medChart'));
-  mc.setOption({
+  // 复用同一个实例，否则每次切到用药页都会在同一个 DOM 上重复 init
+  medChart=medChart||echarts.init(document.getElementById('medChart'));
+  medChart.setOption({
     grid:{left:34,right:16,top:16,bottom:26},
     tooltip:{trigger:'axis'},
     xAxis:{type:'category',data:days,axisLabel:{fontSize:10,color:'#8899a6'}},
@@ -2023,7 +2196,8 @@ function renderMed(){
     series:[{type:'bar',data:data,barWidth:'45%',
       itemStyle:{color:p=>p.value>=4?'#1a9e63':'#e8b24a',borderRadius:[5,5,0,0]},
       label:{show:true,position:'top',fontSize:10,color:'#7b8794',formatter:'{c}'}}]
-  });
+  }, true);
+  medChart.resize();
 }
 
 /* ==================== 复查页 ==================== */
@@ -2033,15 +2207,15 @@ function renderVisit(){
   if(list.length){
     const v=list[0]; const d=daysBetween(today(),v.date);
     el.innerHTML=`<div style="font-size:44px;font-weight:700;color:${d<=7?'#d93a3a':'#1287b8'};line-height:1.1">${d}</div>
-      <div class="muted">天后 · ${v.date} ${v.dept||''}</div>`;
+      <div class="muted">天后 · ${v.date} ${esc(v.dept||'')}</div>`;
   } else {
     el.innerHTML=`<div style="font-size:16px;color:#7b8794;padding:8px 0">尚未安排复查</div>`;
   }
 
   document.getElementById('checkTb').innerHTML=CHECKS.map(c=>{
-    const h=HISTORY[c.k];
-    if(!h||c.k==='-') return `<tr><td>${c.n}</td><td>${c.f}</td><td>—</td><td><span class="badge">待安排</span></td></tr>`;
-    const l=h[h.length-1]; const d=daysBetween(l.date,today());
+    const l=(c.k&&c.k!=='-')?last(c.k):null;
+    if(!l) return `<tr><td>${c.n}</td><td>${c.f}</td><td>—</td><td><span class="badge">待安排</span></td></tr>`;
+    const d=daysBetween(l.date,today());
     const st=d>c.m?'<span class="badge" style="background:#fdeaea;color:#d93a3a">已逾期</span>'
             :(d>c.m*0.75?'<span class="badge" style="background:#fdf3e3;color:#e08b0a">临近</span>'
             :'<span class="badge" style="background:#e8f8f0;color:#1a9e63">正常</span>');
@@ -2053,6 +2227,8 @@ function renderVisit(){
 function addVisit(){
   const d=document.getElementById('visitDate').value;
   if(!d) return toast('请选择日期');
+  // 过去日期存进去后会被「下次复查」过滤掉，用户以为保存成功其实看不到
+  if(d<today()) return toast('复查日期不能早于今天');
   DB.visits.push({date:d,dept:document.getElementById('visitDept').value});
   save(); renderVisit(); renderHome(); toast('已保存');
   document.getElementById('visitDate').value='';document.getElementById('visitDept').value='';
@@ -2136,7 +2312,7 @@ async function initApp(){
   if(window.__echartsReady) await window.__echartsReady;
   renderHome();
 }
-window.addEventListener('resize',()=>{ chart&&chart.resize(); });
+window.addEventListener('resize',()=>{ chart&&chart.resize(); medChart&&medChart.resize(); });
 </script>
 </body>
 </html>
