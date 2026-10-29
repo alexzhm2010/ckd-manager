@@ -87,6 +87,17 @@ background:var(--pri2);color:#fff;cursor:pointer;width:100%;transition:.15s}
 border-radius:20px;padding:6px 13px;font-size:12.5px;cursor:pointer;transition:.15s;font-family:inherit;
 max-width:100%;line-height:1.45;text-align:center}
 .seg button.on{background:var(--pri2);border-color:var(--pri2);color:#fff;font-weight:600}
+.seg-ops{display:flex;justify-content:space-between;align-items:center;margin:-2px 0 8px}
+.mini{border:1px solid #dbe3ea;background:#fff;color:#7b8794;border-radius:14px;
+padding:3px 11px;font-size:11.5px;cursor:pointer;font-family:inherit;transition:.15s}
+.mini:active{background:#eef4f8}
+/* 多选时每个指标带自己的色点 */
+.seg button .sw{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;
+vertical-align:1px;border:1px solid rgba(0,0,0,.12)}
+/* 双轴提示条 */
+.axis-note{background:#f2f6f9;border-radius:10px;padding:7px 10px;font-size:11.5px;
+color:#51606f;margin-bottom:8px;line-height:1.55;display:none}
+.axis-note.on{display:block}
 /* ==== 底栏 ==== */
 nav{position:fixed;left:0;right:0;bottom:0;background:rgba(255,255,255,.96);backdrop-filter:blur(12px);
 border-top:1px solid var(--line);display:flex;max-width:820px;margin:0 auto;padding:7px 0 8px;z-index:50}
@@ -212,8 +223,13 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
 <!-- ============ 指标 ============ -->
 <section class="page" id="p-chart">
   <div class="card">
-    <h2><span class="t"><span class="bar"></span>指标趋势</span></h2>
+    <h2><span class="t"><span class="bar"></span>指标趋势</span><span class="muted" id="selCount"></span></h2>
     <div class="seg" id="segBox"></div>
+    <div class="seg-ops">
+      <span class="muted" style="font-size:11.5px">点击标签可多选对比</span>
+      <button class="mini" onclick="clearSel()">清空</button>
+    </div>
+    <div class="axis-note" id="axisNote"></div>
     <div class="chart" id="mainChart"></div>
     <div class="muted" id="chartTip" style="font-size:12px;margin-top:4px"></div>
   </div>
@@ -524,41 +540,163 @@ function renderLogs(){
   document.getElementById('waterToday').textContent=`今日 ${w} 杯`;
 }
 
-/* ==================== 图表 ==================== */
-let chart=null, curKey='egfr';
+/* ==================== 图表（多指标对比） ==================== */
+let chart=null;
+let selKeys=['egfr'];           // 已选指标（按点击顺序，决定左右轴归属）
+const COLORS=['#1287b8','#e08b0a','#1a9e63','#a855c7','#d93a3a','#0f9ba8'];
+const colorOf=k=>COLORS[selKeys.indexOf(k)%COLORS.length];
+
 function renderSeg(){
-  document.getElementById('segBox').innerHTML=ORDER.map(k=>`<button class="${k===curKey?'on':''}" onclick="switchKey('${k}')">${META[k].n.replace(/[（(].*?[)）]/,'')}</button>`).join('');
+  document.getElementById('segBox').innerHTML=ORDER.map(k=>{
+    const on=selKeys.includes(k);
+    const c=on?colorOf(k):'#cfd8e0';
+    return `<button class="${on?'on':''}" onclick="toggleKey('${k}')">
+      <span class="sw" style="background:${c}"></span>${META[k].n.replace(/[（(].*?[)）]/,'')}</button>`;
+  }).join('');
+  document.getElementById('selCount').textContent = selKeys.length? `已选 ${selKeys.length} 项` : '';
 }
-function switchKey(k){ curKey=k; renderSeg(); drawChart(); }
-function drawChart(){
-  const m=META[curKey];
-  const base=(HISTORY[curKey]||[]).slice();
-  // 合并用户录入
-  Object.keys(DB.labs).forEach(d=>{
+function toggleKey(k){
+  const i=selKeys.indexOf(k);
+  if(i>=0){ if(selKeys.length===1) return toast('至少保留一个指标'); selKeys.splice(i,1); }
+  else{ if(selKeys.length>=6) return toast('最多同时对比 6 个指标'); selKeys.push(k); }
+  renderSeg(); drawChart();
+}
+function clearSel(){ selKeys=['egfr']; renderSeg(); drawChart(); toast('已重置为 eGFR'); }
+
+/* 取某指标全部数据（历史 + 用户录入） */
+function seriesOf(k){
+  const base=(HISTORY[k]||[]).slice();
+  Object.keys(DB.labs||{}).forEach(d=>{
     const rec=DB.labs[d];
-    if(rec[curKey]!=null) base.push({date:d,v:rec[curKey]});
+    if(rec&&rec[k]!=null) base.push({date:d,v:rec[k]});
   });
   base.sort((a,b)=>a.date.localeCompare(b.date));
-  const dates=base.map(x=>x.date.slice(5));
-  const vals=base.map(x=>x.v);
-  if(!chart) chart=echarts.init(document.getElementById('mainChart'));
-  chart.setOption({
-    grid:{left:52,right:16,top:26,bottom:34},
-    tooltip:{trigger:'axis',formatter:p=>`${p[0].name}<br/><b>${p[0].value}</b> ${m.u}`},
-    xAxis:{type:'category',data:dates,axisLabel:{fontSize:10,color:'#8899a6'},axisLine:{lineStyle:{color:'#dde5ec'}}},
-    yAxis:{type:'value',scale:true,axisLabel:{fontSize:10,color:'#8899a6'},splitLine:{lineStyle:{color:'#f0f4f7'}}},
-    series:[{
-      type:'line',data:vals,smooth:.25,symbolSize:7,
-      lineStyle:{width:2.5,color:'#1287b8'},
-      itemStyle:{color:'#1287b8',borderColor:'#fff',borderWidth:1.5},
-      label:{show:true,fontSize:9.5,color:'#5b6b7a',position:'top'},
-      markLine:{silent:true,symbol:'none',data:[
+  return base;
+}
+
+function drawChart(){
+  const keys=selKeys.filter(k=>META[k]);
+  if(!keys.length) return;
+  // 统一时间轴：所有选中指标出现过的日期并集
+  const dateSet=new Set();
+  keys.forEach(k=>seriesOf(k).forEach(x=>dateSet.add(x.date)));
+  const dates=[...dateSet].sort();
+  const xs=dates.map(d=>d.slice(5));
+
+  const multi=keys.length>1;
+  // 2个指标→左右双轴；≥3个→全部归一化（0-100%）
+  const useDual=(keys.length===2);
+  const useNorm=(keys.length>=3);
+
+  // 每个指标的数据：按统一日期轴对齐，缺失为 null（连线断开）
+  const aligned=keys.map(k=>{
+    const map={};
+    seriesOf(k).forEach(x=>{ map[x.date]=x.v; });
+    return dates.map(d=> map[d]!=null? map[d] : null);
+  });
+
+  // 归一化：按该指标自身的最小/最大映射到 0-100
+  function norm(arr){
+    const vs=arr.filter(v=>v!=null);
+    if(!vs.length) return arr.map(()=>null);
+    let lo=Math.min(...vs), hi=Math.max(...vs);
+    if(hi===lo){ lo=lo*0.9||0; hi=hi*1.1||1; }
+    const pad=(hi-lo)*0.12;
+    lo-=pad; hi+=pad;
+    return {data:arr.map(v=> v==null?null: +(((v-lo)/(hi-lo))*100).toFixed(1)), lo, hi, raw:{lo:Math.min(...vs),hi:Math.max(...vs)}};
+  }
+  const normed=useNorm? aligned.map(a=>norm(a)) : null;
+
+  const series=keys.map((k,i)=>{
+    const m=META[k], c=COLORS[i%COLORS.length];
+    const data = useNorm? normed[i].data : aligned[i];
+    const s={
+      name:m.n, type:'line', data, smooth:.25, symbolSize:6, connectNulls:true,
+      lineStyle:{width:2.5,color:c},
+      itemStyle:{color:c,borderColor:'#fff',borderWidth:1.5},
+      emphasis:{focus:'series'},
+      label:{show:true,fontSize:9,color:c,position:'top',
+        formatter:p=>{
+          const rv = useNorm? (seriesOf(k).find(x=>x.date===dates[p.dataIndex])||{}).v : p.value;
+          return rv==null?'':fmt(rv);
+        }}
+    };
+    if(useDual) s.yAxisIndex=i;             // 左0 右1
+    if(!useNorm && !multi){                  // 单指标才画参考线
+      s.markLine={silent:true,symbol:'none',data:[
         {yAxis:m.ref[0],lineStyle:{color:'#7fc9a0',type:'dashed',width:1.2},label:{formatter:'下限 '+m.ref[0],fontSize:9,color:'#7fc9a0'}},
         {yAxis:m.ref[1],lineStyle:{color:'#e5a3a3',type:'dashed',width:1.2},label:{formatter:'上限 '+m.ref[1],fontSize:9,color:'#e5a3a3'}}
-      ]}
-    }]
+      ]};
+    }
+    return s;
   });
-  document.getElementById('chartTip').innerHTML=`共 ${base.length} 次记录 · ${m.n}（${m.u}）· 目标：${m.goal}`;
+
+  // Y 轴配置
+  let yAxis;
+  if(useNorm){
+    yAxis={type:'value',min:0,max:100,axisLabel:{formatter:'{value}%',fontSize:9.5,color:'#8899a6'},
+      splitLine:{lineStyle:{color:'#f0f4f7'}},name:'相对变化',nameTextStyle:{fontSize:9,color:'#8899a6'}};
+  }else if(useDual){
+    yAxis=[
+      {type:'value',scale:true,name:META[keys[0]].u,nameTextStyle:{fontSize:9,color:COLORS[0]},
+       axisLabel:{fontSize:9.5,color:COLORS[0]},splitLine:{lineStyle:{color:'#f0f4f7'}}},
+      {type:'value',scale:true,name:META[keys[1]].u,nameTextStyle:{fontSize:9,color:COLORS[1]},
+       axisLabel:{fontSize:9.5,color:COLORS[1]},splitLine:{show:false}}
+    ];
+  }else{
+    yAxis={type:'value',scale:true,axisLabel:{fontSize:10,color:'#8899a6'},splitLine:{lineStyle:{color:'#f0f4f7'}}};
+  }
+
+  if(!chart) chart=echarts.init(document.getElementById('mainChart'));
+  chart.setOption({
+    color:COLORS,
+    grid:{left:useNorm?44:50,right:(useDual||useNorm)?50:18,top:multi?46:26,bottom:34,containLabel:false},
+    legend: multi? {show:true,top:0,left:'center',itemWidth:14,itemHeight:8,
+      textStyle:{fontSize:10.5,color:'#5b6b7a'},data:keys.map(k=>META[k].n)} : {show:false},
+    tooltip:{
+      trigger:'axis',
+      confine:true,
+      formatter:ps=>{
+        const d=ps[0]&&ps[0].axisValue;
+        const real=dates.find(x=>x.slice(5)===d)||dates[ps[0].dataIndex];
+        let rows=ps.map(p=>{
+          const k=keys[p.seriesIndex];
+          const m=META[k];
+          const rv=seriesOf(k).find(x=>x.date===real);
+          if(!rv) return '';
+          return `<div style="margin-top:3px">${p.marker}<b>${fmt(rv.v)}</b> ${m.u} · ${m.n}</div>`;
+        }).join('');
+        return `<div style="font-size:11.5px;color:#8899a6">${real}</div>${rows}`;
+      }
+    },
+    xAxis:{type:'category',data:xs,boundaryGap:false,
+      axisLabel:{fontSize:10,color:'#8899a6',interval:'auto',rotate:xs.length>8?30:0},
+      axisLine:{lineStyle:{color:'#dde5ec'}}},
+    yAxis:yAxis,
+    series:series
+  }, true);
+
+  // 说明文字
+  const note=document.getElementById('axisNote');
+  if(useNorm){
+    note.className='axis-note on';
+    note.innerHTML=`<b>归一化对比模式</b>：${keys.length} 个指标数值量级不同，纵轴已按各自的最小-最大值换算为 0-100% 相对变化，` +
+      `用于观察<b>变化趋势是否同步</b>。<br>图上标注与悬停提示均为<b>真实数值</b>。` +
+      `<br>范围：` + keys.map((k,i)=>`<span style="color:${COLORS[i%COLORS.length]}">●</span> ${META[k].n} ${normed[i].raw.lo}~${normed[i].raw.hi}`).join('；');
+  }else if(useDual){
+    note.className='axis-note on';
+    note.innerHTML=`<b>双轴模式</b>：<span style="color:${COLORS[0]}">■ 左轴</span> ${META[keys[0]].n}（${META[keys[0]].u}）；
+      <span style="color:${COLORS[1]}">■ 右轴</span> ${META[keys[1]].n}（${META[keys[1]].u}）`;
+  }else{
+    note.className='axis-note';
+    note.innerHTML='';
+  }
+
+  const total=dates.length;
+  document.getElementById('chartTip').innerHTML = multi
+    ? `共 ${total} 个时间点 · 已选 ${keys.length} 项：${keys.map(k=>META[k].n).join('、')}`
+    : `共 ${total} 次记录 · ${META[keys[0]].n}（${META[keys[0]].u}）· 目标：${META[keys[0]].goal}`;
+
   document.getElementById('goalTb').innerHTML=ORDER.map(k=>{
     const mm=META[k]; const l=last(k);
     return `<tr><td><b>${mm.n}</b></td><td style="color:#7b8794;font-size:12px">${mm.goal}</td><td style="text-align:right;font-weight:600">${l?fmt(l.v):'—'}</td></tr>`;
