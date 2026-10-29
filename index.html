@@ -772,7 +772,7 @@ const ALIAS={
   ca:['血钙','钙'],
   p:['无机磷','血磷'],
   pth:['甲状旁腺素','PTH'],
-  hgb:['血红蛋白','HGB'],
+  hgb:['血红蛋白','HGB','血红'],
   alb:['白蛋白','ALB'],
   hco3:['碳酸氢盐','CO2'],
   tc:['总胆固醇','CHOL','TC'],
@@ -784,6 +784,7 @@ const ALIAS={
 const EXCL={
   crea:['白蛋白','ACR','尿','胱抑素'],
   alb:['微量','/肌','ACR','总蛋白','球蛋白','前白蛋白'],
+  hgb:['平均','压积','体积','浓度','含量','MCH','糖化','A1c'],
   ca:['离子','磷'],
   p:['PTH','甲旁'],
   k:['钠','氯','钙'],
@@ -878,7 +879,7 @@ async function parseReports(){
       const pages=await fileToImages(impFiles[i]);
       if(pages.length) jobs.push({name:impFiles[i].name, pages});
     }
-    const needOcr=jobs.some(j=>j.pages.some(p=>p.img));
+    const needOcr=jobs.some(j=>j.pages.some(p=>p.imgs&&p.imgs.length));
 
     let worker=null;
     if(needOcr){
@@ -912,8 +913,11 @@ async function parseReports(){
           impProgress(`第 ${idx+1}/${jobs.length} 个 · 第 ${i+1}/${job.pages.length} 页`, 20+Math.round((i/job.pages.length)*70));
         }
         if(pg.text){ fullText += '\n' + pg.text; continue; }
-        const r=await worker.recognize(pg.img);
-        fullText += '\n' + (r.data.text||'');
+        // 双栏页会拆成左右两张图，各自识别（左右栏互不串行）
+        for(const im of (pg.imgs||[])){
+          const r=await worker.recognize(im);
+          fullText += '\n' + (r.data.text||'');
+        }
       }
       extractFromText(fullText, job.name);
     }
@@ -989,6 +993,63 @@ async function pdfPageText(page){
 }
 
 /* 文件 → 页数组 [{text}]（有文字层）或 [{img}]（需要 OCR） */
+/* 双栏检测：化验单常把项目分成左右两栏且行对齐，整页识别会把
+   「13 血红蛋白 141」和「17 平均血红蛋白浓度 333.0」串成同一行，导致取错值。
+   用垂直投影找贯穿式空白竖带，条件严格，不满足就按单栏处理。 */
+function splitColumns(canvas){
+  const W=canvas.width, H=canvas.height;
+  if(W<420||H<420) return null;
+  let data;
+  try{
+    const cx=canvas.getContext('2d',{willReadFrequently:true});
+    data=cx.getImageData(0,0,W,H).data;
+  }catch(e){ return null; }
+  // 只统计表格主体（避开页眉页脚的大片空白，否则会被误判为栏间空白）
+  const y0=Math.floor(H*0.25), y1=Math.floor(H*0.80), rows=y1-y0;
+  const acc=new Uint32Array(W);
+  for(let y=y0;y<y1;y++){
+    const base=y*W*4;
+    for(let x=0;x<W;x++){
+      const i=base+x*4;
+      if((data[i]*299+data[i+1]*587+data[i+2]*114)/1000<155) acc[x]++;
+    }
+  }
+  const th=rows*0.004;                 // 该列几乎全白
+  const xa=Math.floor(W*0.28), xb=Math.floor(W*0.72);
+  let best=null, st=null;
+  for(let x=xa;x<xb;x++){
+    if(acc[x]<th){ if(st===null) st=x; }
+    else{ if(st!==null){ const len=x-st; if(!best||len>best.len) best={st,len}; st=null; } }
+  }
+  if(st!==null){ const len=xb-st; if(!best||len>best.len) best={st,len}; }
+  if(!best||best.len<W*0.022) return null;        // 中缝不够宽 → 单栏
+  const cutL=best.st, cutR=best.st+best.len;
+  if(cutL<W*0.15||W-cutR<W*0.15) return null;     // 两侧都要有足够宽度
+  let lm=0, rm=0;
+  for(let x=0;x<cutL;x++) lm+=acc[x];
+  for(let x=cutR;x<W;x++) rm+=acc[x];
+  const ratio=lm/Math.max(rm,1);
+  if(!(ratio>0.15&&ratio<6.5)) return null;       // 两侧墨量要大致均衡
+
+  const mk=(x,w)=>{
+    const c=document.createElement('canvas');
+    c.width=w; c.height=H;
+    const cc=c.getContext('2d');
+    cc.fillStyle='#fff'; cc.fillRect(0,0,w,H);
+    cc.drawImage(canvas, x,0,w,H, 0,0,w,H);
+    return c;
+  };
+  const lw=Math.min(W, cutL+3);
+  const rx=Math.max(0, cutR-3);
+  return [mk(0,lw), mk(rx, W-rx)];
+}
+
+/* 一页 → 一张或多张待识别图（双栏时拆成两张） */
+function pageToImgs(canvas){
+  const halves=splitColumns(canvas);
+  return (halves||[canvas]).map(c=>enhanceCanvas(c).toDataURL('image/png'));
+}
+
 async function fileToImages(file){
   const isPdf=/\.pdf$/i.test(file.name)||file.type==='application/pdf';
   if(!isPdf){
@@ -1002,9 +1063,9 @@ async function fileToImages(file){
         const cx=c.getContext('2d');
         cx.fillStyle='#fff'; cx.fillRect(0,0,c.width,c.height);
         cx.drawImage(im,0,0,c.width,c.height);
-        res({img:enhanceCanvas(c).toDataURL('image/png')});
+        res({imgs:pageToImgs(c)});
       };
-      im.onerror=()=>res({img:url});
+      im.onerror=()=>res({imgs:[url]});
       im.src=url;
     })];
   }
@@ -1023,7 +1084,7 @@ async function fileToImages(file){
     const ctx=canvas.getContext('2d');
     ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
     await page.render({canvasContext:ctx,viewport:vp}).promise;
-    out.push({img:enhanceCanvas(canvas).toDataURL('image/png')});
+    out.push({imgs:pageToImgs(canvas)});
   }
   return out;
 }
@@ -1133,6 +1194,18 @@ function findDate(text){
 }
 
 /* ---------- 展示解析结果 + 重复校验 ---------- */
+/* 数值合理性：离参考范围太远，多半是把小数点位或前后项读串了
+   （例如「平均血红蛋白浓度 333.0」被读成 3330 塞给血红蛋白） */
+function impSuspect(p){
+  const m=META[p.key];
+  if(!m||!m.ref||m.ref.length<2) return false;
+  const lo=m.ref[0], hi=m.ref[1];
+  if(!(hi>0)) return false;
+  if(p.v>hi*6) return true;
+  if(lo>0&&p.v<lo*0.12) return true;
+  return false;
+}
+
 function renderImpResult(){
   const res=document.getElementById('impResult');
   const act=document.getElementById('impActions');
@@ -1190,11 +1263,16 @@ function renderImpResult(){
     html+=`<div class="imp-ok"><b>✅ 识别到 ${fresh.length} 项新指标</b>
       <div style="margin-top:7px;font-size:12px;line-height:1.85">
       ${Object.keys(byDate).sort().map(d=>
-        `<div><b>${d}</b>：${byDate[d].map(p=>`${META[p.key].n} <b style="color:#1a9e63">${p.v}</b>`).join('、')}</div>`
+        `<div><b>${d}</b>：${byDate[d].map(p=>{
+          const bad=impSuspect(p);
+          return `${META[p.key].n} <b style="color:${bad?'#d93a3a':'#1a9e63'}">${p.v}</b>`+(bad?' <span style="color:#d93a3a;font-size:11px">⚠ 超出常规范围</span>':'');
+        }).join('、')}</div>`
       ).join('')}
       </div>
       <div style="margin-top:8px;font-size:11.5px;color:#7b8794">
-      ⚠️ OCR 识别可能存在偏差，请先核对数值再写入。</div>
+      ${impParsed.some(impSuspect)
+        ? '⚠️ 标红的数值与参考范围差距过大，<b>通常是位数或小数点识别错误</b>，请重点核对后再写入。'
+        : '⚠️ OCR 识别可能存在偏差，请先核对数值再写入。'}</div>
     </div>`;
   }
 
