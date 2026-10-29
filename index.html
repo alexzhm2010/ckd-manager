@@ -136,6 +136,18 @@ nav div.on{color:var(--pri2);font-weight:600}
 .page.on{display:block}
 @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .empty{text-align:center;color:var(--muted);font-size:13px;padding:22px 0}
+/* 化验报告：整份项目的逐行展示 */
+.rpt-hd{display:flex;justify-content:space-between;align-items:baseline;margin:2px 0 6px}
+.rpt-hd b{font-size:12.5px}
+.rpt-hd .s{font-size:11.5px;color:#7b8794}
+.rpt-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+font-size:12.5px;line-height:1.9;padding:1px 0}
+.rpt-row .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rpt-row .v{white-space:nowrap;text-align:right}
+.rpt-row .u{color:#9aa7b4;font-size:11px}
+.rpt-row .r{color:#9aa7b4;font-size:10.5px;margin-left:5px}
+.rpt-row.norm{opacity:.72}
+.rpt-more{margin-top:5px}
 .list-item{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);font-size:13.5px}
 .list-item:last-child{border-bottom:none}
 .list-item .dt{color:var(--muted);font-size:12px;flex:0 0 74px;padding-top:1px}
@@ -243,8 +255,8 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
   </div>
 
   <div class="card">
-    <h2><span class="t"><span class="bar"></span>报告异常项</span><span class="muted" id="abnCount"></span></h2>
-    <div id="abnList"></div>
+    <h2><span class="t"><span class="bar"></span>化验报告（全部项目）</span><span class="muted" id="rptCount"></span></h2>
+    <div id="rptList"></div>
   </div>
 
   <div class="card">
@@ -388,7 +400,7 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
 <script>
 const KEY='kidney_mgr_v1';
 const DEFAULT={
-  logs:[], meds:{}, visits:[], labs:{}, syms:{}, abn:{}
+  logs:[], meds:{}, visits:[], labs:{}, syms:{}, abn:{}, rpt:{}
 };
 function load(){
   try{ const d=JSON.parse(localStorage.getItem(KEY)); return d?Object.assign({},DEFAULT,d):JSON.parse(JSON.stringify(DEFAULT)); }
@@ -396,6 +408,26 @@ function load(){
 }
 function save(){ localStorage.setItem(KEY, JSON.stringify(DB)); }
 let DB=load();
+
+/* 旧版只存「异常项」（DB.abn），新版存整份报告（DB.rpt）。这里把老数据搬过去。 */
+(function migrateAbn(){
+  DB.rpt=DB.rpt||{};
+  const old=DB.abn||{};
+  let n=0;
+  for(const d of Object.keys(old)){
+    const arr=Array.isArray(old[d])?old[d]:[];
+    if(!arr.length) continue;
+    const cur=DB.rpt[d]=DB.rpt[d]||{items:[]};
+    cur.items=cur.items||[];
+    for(const it of arr){
+      if(!it||!it.name) continue;
+      if(cur.items.some(x=>x.n===it.name)) continue;
+      cur.items.push({n:it.name,v:it.v,lo:it.lo,hi:it.hi,st:it.dir==='low'?'low':'high'});
+      n++;
+    }
+  }
+  if(n){ DB.abn={}; save(); }
+})();
 
 const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
 const daysBetween=(a,b)=>Math.round((new Date(b)-new Date(a))/86400000);
@@ -774,7 +806,7 @@ function addLab(){
 /* ==================== 报告导入（OCR） ==================== */
 let impFiles=[];       // 已选文件
 let impParsed=[];      // 解析结果 [{date,key,v,src}]
-let impAbn=[];         // 非追踪项中的异常值 [{date,name,v,lo,hi,dir}]
+let impRpt=[];         // 本次解析出的整份报告 [{date,src,items,max,missing}]
 let impOrphan=0;       // 有异常箭头但数值未识别的行数
 let impSeqMiss=0, impSeqMax=0;   // 序号缺口（漏识别项）
 let ocrWorker=null;
@@ -963,11 +995,12 @@ async function parseReports(){
         }
       }
       extractFromText(fullText, job.name);
-      impAbn=impAbn.concat(parseAbnormal(fullText));
+      const pr=parseItems(fullText);
+      pr.src=job.name;
+      if(pr.items.length) impRpt.push(pr);
       impOrphan+=countOrphanArrows(fullText);
-      const sq=countSeqGaps(fullText);
-      if(sq.max>impSeqMax) impSeqMax=sq.max;
-      impSeqMiss+=sq.missing;
+      if(pr.max>impSeqMax) impSeqMax=pr.max;
+      impSeqMiss+=pr.missing;
     }
     if(worker) await worker.terminate();
 
@@ -1232,25 +1265,65 @@ function extractFromText(text, src){
   }
 }
 
-/* ---------- 通用化验单解析：抓「项目名 + 结果 + 参考区间」 ----------
-   只用来挑出「超出参考范围、但不在日常追踪清单里」的项目，记到异常项备查。
-   这类项目不进趋势图，避免把图表和标签撑爆。 */
-const ABN_NUM='\\d+(?:\\.+\\s?\\d+)*';
-const ABN_RE=new RegExp(
-  '(?:^|\\s)(\\d{1,2})\\s+' +                              // 序号
-  '([^\\d\\s][^\\d]{1,24}?)\\s*' +                         // 项目名
-  '(?:[<>≤≥]\\s?)?(' + ABN_NUM + ')\\s*' +                 // 结果
-  '(?:[↑↓⇑⇓*※#△]\\s*)?' +                                 // 异常箭头
-  '(' + ABN_NUM + ')\\s*[-~～]\\s*(' + ABN_NUM + ')', 'g');  // 参考区间
+/* ---------- 化验单「逐项」解析 ----------
+   以前只挑「超出参考范围」的项目，正常项整张丢掉，报告没法回看。
+   现在按「序号 + 项目名 + 结果 + 参考区间 + 单位」整行解析，
+   报告里有多少项就入库多少项；异常项高亮，正常项默认折叠。 */
+const RANGE_RE=/([<>≤≥]?\s?\d+(?:\.\d+)?)\s*[-~～—−]\s*(\d+(?:\.\d+)?)/g;
+const TOK_RE=/([<>≤≥]?\s?\d+(?:\.\d+)?)/g;
 
-function abnDec(s){
-  return parseFloat(String(s).replace(/\.+/g,'.').replace(/\s/g,'').replace(/\.$/,''));
+/* 取出「独立数字」：排除 10^9/L、β2-MG、HITACHI 7600 这类粘连写法 */
+function numTokens(s){
+  const out=[];
+  TOK_RE.lastIndex=0;
+  let m;
+  while((m=TOK_RE.exec(s))!==null){
+    // 正则里的 \s? 会把前导空格也吃进来，这里把起点挪回数字本身
+    const lead=m[0].length-m[0].replace(/^\s+/,'').length;
+    const start=m.index+lead, end=m.index+m[0].length;
+    const pre=s[start-1]||'', post=s[end]||'', post2=s[end+1]||'';
+    if(/[\d.]/.test(pre)) continue;                          // 数字的延续
+    if(/[A-Za-z\u4e00-\u9fa5^%]/.test(pre)) continue;         // 粘在字/字母/单位上
+    if(/[A-Za-z^]/.test(post)) continue;                     // 10^9/L、2-MG
+    if(post==='-'&&/[A-Za-z]/.test(post2)) continue;
+    const v=parseFloat(m[0].replace(/\s/g,'').replace(/^[<>≤≥]/,''));
+    if(!isFinite(v)) continue;
+    out.push({v,start,end});
+  }
+  return out;
+}
+
+function cleanItemName(s){
+  let n=String(s||'')
+    .replace(/[“”‘’"'《》〈〉，。、·*#※△▲◆◇○●★☆]/g,'')
+    .replace(/^[^A-Za-z\u4e00-\u9fa5α-ωΑ-Ω]+/,'')            // 去掉名字前的「% 18 」这类残留
+    .replace(/[\s:：,，.。;；_\-—]+$/,'')
+    .replace(/[（(]\s*$/,'')
+    .replace(/\s{2,}/g,' ')
+    .trim();
+  // 名字前常粘着「L 17 」这类列残留：首个中文之前若有空格+数字，直接丢掉
+  const ci=n.search(/[\u4e00-\u9fa5]/);
+  if(ci>0&&ci<=8&&/^[A-Za-z]{1,2}\s+\d{1,2}\s*$/.test(n.slice(0,ci))) n=n.slice(ci).trim();
+  // OCR 常把上一行的尾巴并进来，名字里出现小数就一定是串行噪声
+  if(/\d+\.\d+/.test(n)) return '';
+  // 括号不配平（"氯C1)"）时去掉多出来的右括号
+  const l=(n.match(/[（(]/g)||[]).length, r=(n.match(/[）)]/g)||[]).length;
+  if(r>l) n=n.replace(/[）)]\s*$/,'').trim();
+  if(n.length<2||n.length>30) return '';
+  if(/[_|]/.test(n)) return '';                              // 化验项目名里不会有下划线/竖线
+  if(n.length>=14&&(n.match(/ /g)||[]).length>=2&&/[a-z]{2,}/.test(n)) return ''; // 状态栏那类含小写单词的长串噪声
+  if(!/[\u4e00-\u9fa5]/.test(n)) return '';                  // 没有中文的多半是表头噪声
+  if(/项目|参考|结果|单位|检验|样本|姓名|报告|申请|检测|采集|接收|审核|实验室|声明|电话|地址|第.*页/.test(n)) return '';
+  return n;
 }
 
 /* 小数点丢失修正：OCR 常把 333.0 读成 3330、把 2.33 读成 233。
    如果原值超出参考范围、但缩小 10/100 倍后正好落在范围内，基本可判定是小数点丢失。 */
 function fixDecimal(v, lo, hi){
   if(v>=lo&&v<=hi) return null;
+  // 只修「明显多打了一位」的：值本身到了三位数，或参考区间就在小数点后
+  // （15 与 0-5 这种是真的偏高，不能当成 1.5）
+  if(!(v>=100||hi<2)) return null;
   for(const k of [10,100,1000]){
     const t=Math.round(v/k*1000)/1000;
     if(t>=lo&&t<=hi) return {v:t, k};
@@ -1258,85 +1331,225 @@ function fixDecimal(v, lo, hi){
   return null;
 }
 
-function parseAbnormal(text){
-  const out=[];
-  if(!text) return out;
-  const date=findDate(text)||'';
-  for(const line of text.split(/[\n\r]+/)){
-    ABN_RE.lastIndex=0;
-    let m;
-    while((m=ABN_RE.exec(line))){
-      const v=abnDec(m[3]), lo=abnDec(m[4]), hi=abnDec(m[5]);
-      if(!isFinite(v)||!isFinite(lo)||!isFinite(hi)) continue;
-      if(!(hi>lo)) continue;                       // 区间无效（0-0 之类多为误读）
-      const name=m[2].replace(/[*#※△“”‘’《》，。、·\s]/g,'');
-      if(name.length<2) continue;
-      if(v>=lo&&v<=hi) continue;                   // 正常项不记
-      // 小数点丢失的，按修正后的值判断，不当作异常
-      const fix=fixDecimal(v, lo, hi);
-      if(fix){
-        if(out.some(x=>x.name===name)) continue;
-        out.push({date, name, v:fix.v, lo, hi, dir:'fix', raw:v});
-        continue;
-      }
-      // 已进入追踪清单的项目走指标流程，这里不重复
-      if(impParsed.some(p=>p.date===date&&Math.abs(p.v-v)<1e-6)) continue;
-      if(out.some(x=>x.name===name&&Math.abs(x.v-v)<1e-6)) continue;
-      out.push({date, name, v, lo, hi, dir: v>hi?'high':'low'});
+/* 定性结果（尿常规常见）：阴性 / 弱阳性 / 2+ */
+function qualValue(body){
+  const re=/(弱阳性|阴性|阳性|negative|neg|trace|±|\d\s?\+{1,3}|\s\+{1,3}(?=\s|$))/ig;
+  let m;
+  while((m=re.exec(body))!==null){
+    const str=m[0].replace(/\s/g,'');
+    const at=m.index, pre=body[at-1]||'';
+    const hasNum=numTokens(body.slice(0,at)).length>0;
+    const plus=/\+|±/.test(str);
+    if(/^\d/.test(str)){
+      if(/[\d.]/.test(pre)) continue;        // 「3.21 +」末尾的 1 被当成 1+，跳过
+      return {raw:str, at};
+    }
+    if(/^\+/.test(str)&&hasNum) continue;    // ↑ 被读成了 +，结果还是前面那个数字
+    if(!plus&&hasNum) continue;               // 阴性/阳性 出现在参考值那一列
+    return {raw:str, at};
+  }
+  return null;
+}
+
+/* 一行 → 一个项目。返回 {n:名称, v:结果, u:单位, lo, hi, st:状态, fx:是否修正} */
+function parseItemLine(body){
+  if(!body||body.length<3) return null;
+  // 参考区间取最靠后的一段（前面可能还有批号、日期之类的数字）
+  RANGE_RE.lastIndex=0;
+  let rg=null,m;
+  while((m=RANGE_RE.exec(body))!==null){
+    const a=parseFloat(m[1].replace(/\s/g,'').replace(/^[<>≤≥]/,''));
+    const b=parseFloat(m[2].replace(/\s/g,''));
+    if(!(b>a)) continue;                                     // 0-0、区间倒置都是误读
+    rg={a,b,start:m.index,end:m.index+m[0].length};
+  }
+
+  // 定性结果优先：2+ / 阴性 这类没有数字，但同样是报告结论
+  const q=qualValue(body);
+  if(q){
+    const name=cleanItemName(body.slice(0,q.at));
+    if(!name) return null;
+    return {n:name, v:q.raw, u:'', lo:null, hi:null, st:/阴性|neg/i.test(q.raw)?'ok':'high'};
+  }
+
+  const toks=numTokens(body);
+  if(!toks.length) return null;
+
+  let val=null;
+  if(rg){
+    // 结果 = 参考区间之前的最后一个独立数字（跳过 ↑↓ 之类噪声）
+    for(const k of toks) if(k.end<=rg.start) val=k;
+  }
+  if(!val){
+    for(const k of toks){
+      if(rg&&k.end>rg.start) continue;                       // 区间后面的数字是单位/方法
+      if(k.start<2) continue;                                // 太靠前多半是名字里的数字
+      val=k; break;
     }
   }
-  return out;
-}
+  if(!val||!(val.v>=0&&val.v<1e7)) return null;
 
-/* 序号连续性：化验单项目是连续编号的，缺号说明有项目没读出来。
-   这比靠箭头可靠——箭头本身也常被 OCR 吃掉。 */
-function countSeqGaps(text){
-  const seen=new Set();
-  for(const line of text.split(/[\n\r]+/)){
-    const m=line.match(/^\s*(\d{1,2})\s+\S/);
-    if(m){ const n=+m[1]; if(n>=1&&n<=60) seen.add(n); }
+  const name=cleanItemName(body.slice(0,val.start));
+  if(!name) return null;
+
+  let lo=null,hi=null,st='unk';
+  if(rg){ lo=rg.a; hi=rg.b; st=val.v<lo?'low':val.v>hi?'high':'ok'; }
+
+  let v=val.v, raw=0;
+  if(st!=='ok'&&rg){
+    const f=fixDecimal(v,lo,hi);
+    if(f){ raw=v; v=f.v; st='ok'; }
   }
-  if(seen.size<8) return {missing:0, max:0};
-  let max=0; for(const n of seen) if(n>max) max=n;
-  let missing=0;
-  for(let i=1;i<=max;i++) if(!seen.has(i)) missing++;
-  return {missing, max};
+
+  let unit='';
+  const after=rg?body.slice(rg.end):body.slice(val.end);
+  const um=after.match(/^\s*([A-Za-zμµ%][A-Za-z0-9μµ%\/\^\.]{0,11})/);
+  if(um){
+    const u=um[1].replace(/[.,;:\/]+$/,'');
+    if(/\//.test(u)||/%/.test(u)||/^(fL|pg|mL|L|g|mg|U|IU|mmHg|s)$/.test(u)) unit=u;
+  }
+
+  const it={n:name,v,u:unit,lo,hi,st};
+  if(raw) it.raw=raw;                                        // 只在修正过时记原值
+  return it;
 }
 
-/* 报告里有异常箭头、但数值没识别出来的行数（用于提醒人工核对） */
+/* 逐项解析用的轻量归一化：只补小数点、压中文间空格。
+   不能复用 ocrNormalize——它会把「2 肌酐」粘成「2肌酐」，序号和项目名就分不开了。 */
+function parseNorm(t){
+  return String(t||'')
+    .replace(/(\d)\.[ \t]+(\d)/g,'$1.$2')
+    .replace(/([\u4e00-\u9fa5（））：:])[ \t]+(?=[\u4e00-\u9fa5（））：:])/g,'$1');
+}
+
+/* 双栏报告 OCR 串成一行时，按行内序号把两个项目切开 */
+function splitSegs(line){
+  const re=/\s(\d{1,2})\s*(?=[\u4e00-\u9fa5])/g;
+  const cuts=[];
+  let m;
+  while((m=re.exec(line))!==null){
+    const n=+m[1];
+    if(n<1||n>60) continue;
+    const before=line.slice(0,m.index);
+    if(before.replace(/\s/g,'').length<4) continue;          // 前面还没内容，不算切点
+    if(!/[\u4e00-\u9fa5]{2}/.test(before)) continue;
+    cuts.push(m.index+1);
+  }
+  if(!cuts.length) return [line];
+  const out=[];
+  let prev=0;
+  for(const c of cuts){ out.push(line.slice(prev,c).trim()); prev=c; }
+  out.push(line.slice(prev).trim());
+  return out.filter(Boolean);
+}
+
+/* 整份报告 → {date, items, max, missing} */
+function parseItems(text){
+  const t=parseNorm(text||'');
+  const date=findDate(t)||'';
+  const items=[], names=new Set(), seq=new Set();
+  const lines=t.split(/[\n\r]+/);
+  const NO_RE=/^(\d{1,2})(?:[\s.、．,，:：]+|(?=[\u4e00-\u9fa5]))(.*)$/;
+  let failed=0;                                              // 有参考区间却没解析出来的行
+
+  for(const raw of lines){
+    const line=raw.trim();
+    if(line.length<4) continue;
+    for(const seg of splitSegs(line)){
+      if(/^\d{1,2}:\d{2}/.test(seg)) continue;               // 04:30 这种是截图里的时间，不是序号
+      const m=seg.match(NO_RE);
+      if(!m) continue;
+      const no=+m[1];
+      if(no<1||no>80) continue;
+      const it=parseItemLine(m[2]);
+      const hasRange=/\d\s*[-~～—−]\s*\d/.test(m[2]);
+      if(!it&&!hasRange) continue;                           // 不是化验项，编号也不计入
+      seq.add(no);
+      if(!it){ failed++; continue; }
+      if(names.has(it.n)) continue;                          // 双栏/多页重复
+      names.add(it.n);
+      items.push(it);
+    }
+  }
+
+  // 兜底：没有序号的版式（部分截图），只要「名字 + 值 + 区间」齐全也收
+  for(const raw of lines){
+    const line=raw.trim();
+    if(line.length<6) continue;
+    if(/^\d{1,2}(?=[\s.、．,，:：]|[\u4e00-\u9fa5])/.test(line)) continue;
+    if(!/[\u4e00-\u9fa5]/.test(line)) continue;
+    const it=parseItemLine(line);
+    if(!it||it.st==='unk') continue;                          // 没区间就分不清名字和数值，宁可不收
+    if(it.n.length<3||names.has(it.n)) continue;
+    names.add(it.n);
+    items.push(it);
+  }
+
+  let max=0,min=99;
+  for(const n of seq){ if(n>max) max=n; if(n<min) min=n; }
+  // 只统计「区间内缺号」：多页报告可能从 22 号开始，不能把 1-21 算成漏读
+  const gap=seq.size?(max-min+1)-seq.size:0;
+  return {date, items, max, missing:seq.size>=8?gap+failed:0};
+}
+
+/* 报告里有异常箭头、但整行没有数字的行数（用于提醒人工核对） */
 function countOrphanArrows(text){
   let n=0;
-  for(const line of text.split(/[\n\r]+/)){
+  for(const line of (text||'').split(/[\n\r]+/)){
     if(!/[↑↓]/.test(line)) continue;
-    ABN_RE.lastIndex=0;
-    if(!ABN_RE.test(line)) n++;
+    if(!/\d/.test(line)) n++;
   }
-  ABN_RE.lastIndex=0;
   return n;
 }
 
-/* ---------- 记录页：报告异常项 ---------- */
-function renderAbn(){
-  const el=document.getElementById('abnList');
-  const cnt=document.getElementById('abnCount');
+/* ---------- 记录页：整份化验报告（全部项目） ---------- */
+let rptOpen={};
+function toggleRpt(d){ rptOpen[d]=!rptOpen[d]; renderRpt(); }
+
+function rptItems(d){
+  const r=DB.rpt&&DB.rpt[d];
+  if(!r) return [];
+  return Array.isArray(r)?r:(r.items||[]);
+}
+const isAbn=it=>it&&(it.st==='high'||it.st==='low');
+
+function renderRpt(){
+  const el=document.getElementById('rptList');
+  const cnt=document.getElementById('rptCount');
   if(!el) return;
-  const dates=Object.keys(DB.abn||{}).sort().reverse();
-  const total=dates.reduce((s,d)=>s+DB.abn[d].length,0);
-  cnt.textContent=total?`共 ${total} 项`:'';
+  const dates=Object.keys(DB.rpt||{}).filter(d=>rptItems(d).length).sort().reverse();
+  let total=0, abnTotal=0;
+  dates.forEach(d=>{ const a=rptItems(d); total+=a.length; abnTotal+=a.filter(isAbn).length; });
+  if(cnt) cnt.textContent=total?`${dates.length} 份 · ${total} 项`:'';
   if(!total){
-    el.innerHTML='<div class="empty">导入报告后，超出参考范围的项目会自动记在这里</div>';
+    el.innerHTML='<div class="empty">导入报告后，每一项结果（含正常项）都会存到这里，可随时回看</div>';
     return;
   }
-  el.innerHTML=dates.slice(0,6).map(d=>`
-    <div style="margin-bottom:12px">
-      <div style="font-size:11.5px;color:#7b8794;margin-bottom:5px">${d}</div>
-      ${DB.abn[d].map(it=>`
-        <div style="font-size:12.5px;line-height:1.95;display:flex;justify-content:space-between;gap:10px">
-          <span>${it.name}</span>
-          <span><b style="color:${it.dir==='high'?'#d93a3a':'#0b6e99'}">${it.v} ${it.dir==='high'?'↑':'↓'}</b>
-          <span style="color:#9aa7b4;font-size:11.5px"> 参考 ${it.lo}-${it.hi}</span></span>
-        </div>`).join('')}
-    </div>`).join('') + (dates.length>6?`<div class="muted" style="font-size:11.5px">…另有 ${dates.length-6} 次报告</div>`:'');
+  const row=it=>{
+    const abn=isAbn(it);
+    const col=abn?(it.st==='high'?'#d93a3a':'#0b6e99'):'#51606f';
+    const mark=abn&&typeof it.v==='number'?(it.st==='high'?'↑':'↓'):'';   // 2+ / 阴性 不用再加箭头
+    const ref=abn&&it.lo!=null?`<span class="r">参考 ${it.lo}-${it.hi}</span>`:'';
+    const fx=it.raw?`<span class="r" style="color:#c08a00" title="原件读数 ${it.raw}，按参考区间修正">≈</span>`:'';
+    return `<div class="rpt-row${abn?'':' norm'}">
+      <span class="n">${it.n}</span>
+      <span class="v"><b style="color:${col}">${it.v}${fx} ${mark}</b><span class="u"> ${it.u||''}</span>${ref}</span>
+    </div>`;
+  };
+  el.innerHTML=dates.slice(0,8).map(d=>{
+    const items=rptItems(d);
+    const abn=items.filter(isAbn);
+    const open=!!rptOpen[d];
+    return `<div style="margin-bottom:16px">
+      <div class="rpt-hd">
+        <b>${d}</b>
+        <span class="s" style="color:${abn.length?'#d93a3a':'#7b8794'}">${items.length} 项${abn.length?` · ${abn.length} 项异常`:' · 全部在参考范围'}</span>
+      </div>
+      ${(open?items:(abn.length?abn:items.slice(0,6))).map(row).join('')}
+      ${!abn.length?'<div class="s" style="font-size:11.5px;color:#7b8794">各项均在参考范围内</div>':''}
+      ${(open||items.length>(abn.length||6))?`<div class="rpt-more"><button class="mini" onclick="toggleRpt('${d}')">${open?'收起':'展开全部 '+items.length+' 项'}</button></div>`:''}
+    </div>`;
+  }).join('') + (dates.length>8?`<div class="muted" style="font-size:11.5px">…另有 ${dates.length-8} 份报告</div>`:'');
 }
 
 /* 从文本里找检查日期 */
@@ -1386,11 +1599,35 @@ function impSuspect(p){
   return p.v>rh*50 || (rl>0&&p.v<rl*0.02);
 }
 
+/* 把本次识别出的多份报告按日期合并 */
+function groupImp(){
+  const map=new Map();
+  for(const r of impRpt){
+    const d=r.date||'';
+    const g=map.get(d)||{date:d,src:[],items:[],max:0,missing:0};
+    for(const it of r.items){
+      if(!g.items.some(x=>x.n===it.n)) g.items.push(it);
+    }
+    if(r.src&&g.src.indexOf(r.src)<0) g.src.push(r.src);
+    if((r.max||0)>g.max) g.max=r.max;
+    g.missing+=(r.missing||0);
+    map.set(d,g);
+  }
+  return [...map.values()].sort((a,b)=>a.date.localeCompare(b.date));
+}
+
+let impOpen={};
+function toggleImp(d){ impOpen[d]=!impOpen[d]; renderImpResult(); }
+
 function renderImpResult(){
   const res=document.getElementById('impResult');
   const act=document.getElementById('impActions');
 
-  if(!impParsed.length&&!impAbn.filter(a=>a.dir!=='fix').length){
+  const groups=groupImp();
+  const allItems=groups.reduce((s,g)=>s+g.items.length,0);
+  const allAbn=groups.reduce((s,g)=>s+g.items.filter(isAbn).length,0);
+
+  if(!allItems&&!impParsed.length){
     res.innerHTML=`<div class="imp-dup"><b>⚠️ 未能识别出有效指标</b><br>
       可能原因：图片清晰度不足、报告版式特殊、或识别结果与已知指标名不匹配。<br><br>
       <b>建议</b>：换成更清晰的截图/PDF 重试；或把报告直接发给我（在对话里上传），我逐页人工核对。</div>`;
@@ -1398,9 +1635,7 @@ function renderImpResult(){
     return;
   }
 
-  const noDate=impParsed.filter(p=>!p.date);
-
-  // 重复检测：同一日期 + 同一指标
+  // 追踪指标（会进趋势图的 18 项）重复检测
   const dups=[], fresh=[], seen=new Set();
   for(const p of impParsed){
     if(!p.date) continue;
@@ -1415,7 +1650,7 @@ function renderImpResult(){
 
   let html='';
 
-  // 有重复 → 停止导入
+  // 有重复 → 停止导入（避免覆盖已核实的记录）
   if(dups.length){
     html+=`<div class="imp-dup">
       <b>⚠️ 检测到 ${dups.length} 项重复，已停止导入</b>
@@ -1432,65 +1667,80 @@ function renderImpResult(){
     return;
   }
 
-  if(noDate.length){
-    html+=`<div class="imp-dup"><b>⚠️ ${noDate.length} 项未识别出检查日期</b>，这些项无法入库（需要日期才能放到趋势图上）。<br>
-      <span style="font-size:11.5px;color:#7b8794">可先在上方「手动补录」里补上，或告诉我日期我帮你处理。</span></div>`;
+  const prow=it=>{
+    const abn=isAbn(it);
+    const col=abn?(it.st==='high'?'#d93a3a':'#0b6e99'):'#51606f';
+    const ref=(it.lo!=null&&it.hi!=null)?`<span style="color:#b0bcc8;font-size:10.5px">参考 ${it.lo}-${it.hi}</span>`:'';
+    const fx=it.raw?`<span style="color:#c08a00;font-size:10.5px" title="原件读数 ${it.raw}，按参考区间修正"> ≈</span>`:'';
+    const mk=abn&&typeof it.v==='number'?(it.st==='high'?' ↑':' ↓'):'';
+    return `<div style="font-size:12px;line-height:1.78;display:flex;justify-content:space-between;gap:8px${abn?'':';opacity:.7'}">
+      <span style="flex:1;min-width:0">${it.n}</span>
+      <span style="white-space:nowrap"><b style="color:${col}">${it.v}${fx}${mk}</b> ${ref}</span></div>`;
+  };
+
+  if(groups.length){
+    html+=`<div class="imp-ok"><b>✅ 识别到 ${allItems} 项检验结果</b>
+      <span style="font-size:11.5px;color:#51606f">（${allAbn} 项超出参考范围）</span>
+      <div style="margin-top:8px">${groups.map(g=>{
+        const abn=g.items.filter(isAbn);
+        const open=!!impOpen[g.date];
+        return `<div style="margin-top:9px">
+          <div style="display:flex;justify-content:space-between;align-items:baseline">
+            <b style="font-size:12.5px">${g.date||'日期未识别'}</b>
+            <span style="font-size:11px;color:${abn.length?'#d93a3a':'#7b8794'}">${g.items.length} 项${abn.length?` · ${abn.length} 项异常`:' · 全部正常'}</span>
+          </div>
+          ${(open?g.items:(abn.length?abn:g.items.slice(0,6))).map(prow).join('')}
+          ${(open||g.items.length>(abn.length||6))?`<button class="mini" onclick="toggleImp('${g.date}')">${open?'收起':'查看全部 '+g.items.length+' 项'}</button>`:''}
+        </div>`;
+      }).join('')}</div>
+      <div style="margin-top:8px;font-size:11.5px;color:#7b8794">
+      ⚠️ OCR 识别可能存在偏差，写入前请对照原件扫一眼异常项。</div>
+    </div>`;
   }
 
   if(fresh.length){
-    const byDate={};
-    fresh.forEach(p=>{ (byDate[p.date]=byDate[p.date]||[]).push(p); });
-    html+=`<div class="imp-ok"><b>✅ 识别到 ${fresh.length} 项新指标</b>
-      <div style="margin-top:7px;font-size:12px;line-height:1.85">
-      ${Object.keys(byDate).sort().map(d=>
-        `<div><b>${d}</b>：${byDate[d].map(p=>{
+    html+=`<div class="imp-ok" style="background:#f4faf7">
+      <b>📈 其中 ${fresh.length} 项属于日常追踪指标，会同步到趋势图</b>
+      <div style="margin-top:6px;font-size:12px;line-height:1.85">
+      ${Object.keys(fresh.reduce((m,p)=>{(m[p.date]=m[p.date]||[]).push(p);return m;},{}))
+        .sort().map(d=>`<div><b>${d}</b>：${fresh.filter(p=>p.date===d).map(p=>{
           const bad=impSuspect(p);
-          return `${META[p.key].n} <b style="color:${bad?'#d93a3a':'#1a9e63'}">${p.v}</b>`+(bad?' <span style="color:#d93a3a;font-size:11px">⚠ 超出常规范围</span>':'');
-        }).join('、')}</div>`
-      ).join('')}
+          return `${META[p.key].n} <b style="color:${bad?'#d93a3a':'#1a9e63'}">${p.v}</b>`+(bad?' <span style="color:#d93a3a;font-size:11px">⚠ 数值可疑</span>':'');
+        }).join('、')}</div>`).join('')}
       </div>
-      <div style="margin-top:8px;font-size:11.5px;color:#7b8794">
-      ${impParsed.some(impSuspect)
-        ? '⚠️ 标红的数值与参考范围差距过大，<b>通常是位数或小数点识别错误</b>，请重点核对后再写入。'
-        : '⚠️ OCR 识别可能存在偏差，请先核对数值再写入。'}</div>
+      ${impParsed.some(impSuspect)?'<div style="margin-top:6px;font-size:11.5px;color:#d93a3a">标红的数值与你的历史值差距过大，<b>通常是位数或小数点识别错误</b>，请重点核对。</div>':''}
     </div>`;
   }
 
-  // 非追踪项：真异常 vs 小数点疑似错误
-  const realAbn=impAbn.filter(a=>a.dir!=='fix');
-  const fixedN=impAbn.filter(a=>a.dir==='fix').length;
-  if(realAbn.length){
-    html+=`<div class="imp-dup" style="border-color:#f0c674;background:#fffbf0">
-      <b style="color:#8a6100">另外发现 ${realAbn.length} 项超出参考范围</b>
-      <div style="margin-top:7px;font-size:12px;line-height:1.85">
-      ${realAbn.slice(0,12).map(a=>`· ${a.name} <b style="color:${a.dir==='high'?'#d93a3a':'#0b6e99'}">${a.v} ${a.dir==='high'?'↑':'↓'}</b>
-        <span style="color:#9aa7b4;font-size:11.5px">参考 ${a.lo}-${a.hi}</span>`).join('<br>')}
-      ${realAbn.length>12?`<br>…另有 ${realAbn.length-12} 项`:''}
-      </div>
-      <div style="margin-top:7px;font-size:11.5px;color:#8a6100;line-height:1.6">
-      这些项目不在日常追踪清单里，会记到「记录 → 报告异常项」备查，不进趋势图。</div>
-    </div>`;
+  const fixed=groups.reduce((s,g)=>s+g.items.filter(it=>it.raw).length,0);
+  if(fixed){
+    const list=groups.flatMap(g=>g.items.filter(it=>it.raw).map(it=>`${it.n}：读成 ${it.raw} → 按 ${it.v}`));
+    html+=`<div class="imp-dup"><b>ℹ️ ${fixed} 项数值像是丢了小数点，已按参考区间修正</b><br>
+      <span style="font-size:11.5px;color:#51606f">${list.slice(0,6).join('；')}</span><br>
+      <span style="font-size:11.5px;color:#7b8794">修正后落在参考范围内，不记为异常。如与实际不符请告诉我。</span></div>`;
   }
-  if(fixedN){
-    const items=impAbn.filter(a=>a.dir==='fix');
-    html+=`<div class="imp-dup"><b>ℹ️ ${fixedN} 项数值像是丢了小数点，已按参考范围修正</b><br>
-      <span style="font-size:11.5px;color:#51606f">${items.slice(0,6).map(a=>`${a.name}：读成 ${a.raw} → 按 ${a.v}`).join('；')}</span><br>
-      <span style="font-size:11.5px;color:#7b8794">修正后都在参考范围内，不记为异常。如与实际不符请告诉我。</span></div>`;
+
+  const noDate=groups.filter(g=>!g.date);
+  if(noDate.length){
+    html+=`<div class="imp-dup"><b>⚠️ 有 ${noDate.length} 份报告没识别出检查日期</b><br>
+      <span style="font-size:11.5px;color:#7b8794">会先存到「日期未识别」下，可在记录页对照原件补日期。</span></div>`;
   }
+
   if(impOrphan||impSeqMiss>2){
+    // 尿常规里颜色、镜检这类非数值项本来就整理不出来，提示时说明白
     const bits=[];
-    if(impSeqMax) bits.push(`报告共 ${impSeqMax} 项，其中 <b>${impSeqMiss} 项没能识别出来</b>`);
+    if(impSeqMax) bits.push(`报告编号到 ${impSeqMax} 项，其中 <b>${impSeqMiss} 项没整理出结果</b>`);
     if(impOrphan) bits.push(`另有 ${impOrphan} 处异常箭头对应的数值没读准`);
     html+=`<div class="imp-dup"><b>⚠️ 这份报告没有读全</b><br>
       <span style="font-size:12px">${bits.join('；')}。</span><br>
-      <span style="font-size:11.5px;color:#7b8794">未识别的原因多为字迹模糊、表格线干扰。如果是异常项目，可能因此漏记，<b>建议对照原件补一下</b>。</span></div>`;
+      <span style="font-size:11.5px;color:#7b8794">颜色、镜检这类非数值项本来就不会入库；其余多为字迹模糊或表格线干扰。异常项请对照原件核一眼。</span></div>`;
   }
 
   res.innerHTML=html;
   const parts=[];
-  if(fresh.length) parts.push(`写入 ${fresh.length} 项指标`);
-  if(realAbn.length) parts.push(`记录 ${realAbn.length} 项异常`);
-  act.innerHTML = (fresh.length||realAbn.length)
+  if(allItems) parts.push(`记录 ${allItems} 项结果`);
+  if(fresh.length) parts.push(`${fresh.length} 项进趋势图`);
+  act.innerHTML = (allItems||fresh.length)
     ? `<button class="btn" onclick="confirmImport()">确认${parts.join(' + ')}</button>
        <button class="btn ghost" onclick="clearImp()">取消</button>`
     : `<button class="btn ghost" onclick="clearImp()">关闭</button>`;
@@ -1500,7 +1750,8 @@ function renderImpResult(){
 /* ---------- 确认写入 ---------- */
 function confirmImport(){
   const fresh=window._fresh||[];
-  if(!fresh.length&&!impAbn.length) return;
+  const groups=groupImp();
+  if(!fresh.length&&!groups.length) return;
   // 二次校验防并发/重复点击
   const conflict=fresh.filter(p=>DB.labs[p.date]&&DB.labs[p.date][p.key]!=null);
   if(conflict.length){
@@ -1512,34 +1763,43 @@ function confirmImport(){
     DB.labs[p.date][p.key]=p.v;
     DB.logs.unshift({type:'lab',date:p.date,ts:Date.now(),key:p.key,v:p.v});
   });
-  // 非追踪项的异常值：单独存档，不进趋势图
-  let abnN=0;
-  DB.abn=DB.abn||{};
-  for(const a of impAbn){
-    if(!a.date||a.dir==='fix') continue;
-    const arr=DB.abn[a.date]=DB.abn[a.date]||[];
-    if(arr.some(x=>x.name===a.name)) continue;
-    arr.push({name:a.name,v:a.v,lo:a.lo,hi:a.hi,dir:a.dir});
-    abnN++;
+
+  // 整份报告入库：所有项目（含正常项）都存，异常项只是标出来
+  DB.rpt=DB.rpt||{};
+  let rn=0, newN=0, updN=0, abnN=0;
+  for(const g of groups){
+    const d=g.date||'日期未识别';
+    const cur=DB.rpt[d]=(DB.rpt[d]&&DB.rpt[d].items)?DB.rpt[d]:{items:[]};
+    for(const it of g.items){
+      const old=cur.items.find(x=>x.n===it.n);
+      if(old){
+        if(old.v!==it.v||old.st!==it.st){ Object.assign(old,it); updN++; }
+      }else{
+        cur.items.push(it); newN++;
+      }
+      if(isAbn(it)) abnN++;
+    }
+    rn+=g.items.length;
   }
+  if(DB.abn&&Object.keys(DB.abn).length) DB.abn={};
   save();
-  const msg=[];
-  if(fresh.length) msg.push(`${fresh.length} 项指标`);
-  if(abnN) msg.push(`${abnN} 项异常`);
+
+  const msg=[`${rn} 项结果`];
+  if(fresh.length) msg.push(`${fresh.length} 项进趋势图`);
   document.getElementById('impResult').innerHTML=
     `<div class="imp-ok"><b>✅ 已记录 ${msg.join('、')}</b><br>
-     <span style="font-size:12px;color:#51606f">${fresh.length?'趋势图已更新。':''}${abnN?'异常项在「记录」页可查看。':''}</span></div>`;
+     <span style="font-size:12px;color:#51606f">${rn} 项全部存入「记录 → 化验报告」，其中 ${abnN} 项异常已标红。${fresh.length?'趋势图已更新。':''}</span></div>`;
   document.getElementById('impActions').innerHTML=`<button class="btn ghost" onclick="clearImp()">完成</button>`;
-  impFiles=[]; impParsed=[]; impAbn=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0;
+  impFiles=[]; impParsed=[]; impRpt=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0; impOpen={};
   document.getElementById('impFile').value='';
   document.getElementById('impList').innerHTML='';
   document.getElementById('impState').textContent='';
-  drawChart(); renderLogs(); renderAbn();
+  drawChart(); renderLogs(); renderRpt();
   toast(`已记录 ${msg.join('、')}`);
 }
 
 function clearImp(){
-  impParsed=[]; impFiles=[]; impAbn=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0;
+  impParsed=[]; impFiles=[]; impRpt=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0;
   document.getElementById('impResult').innerHTML='';
   document.getElementById('impActions').innerHTML='';
   document.getElementById('impList').innerHTML='';
@@ -1683,7 +1943,7 @@ async function initApp(){
   document.getElementById('labDate').value=today();
   document.getElementById('labKey').innerHTML=ORDER.map(k=>`<option value="${k}">${META[k].n}</option>`).join('');
   // 图表库可能还在下载（首次约 1MB），先渲染不依赖图表的页面，避免整页空白
-  renderLogs(); renderAbn(); renderKSym(); renderKnow(); initImport();
+  renderLogs(); renderRpt(); renderKSym(); renderKnow(); initImport();
   if(window.__echartsReady) await window.__echartsReady;
   renderHome();
 }
