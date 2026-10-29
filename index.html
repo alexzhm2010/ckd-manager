@@ -128,6 +128,15 @@ padding:10px 12px;font-size:13px;margin-top:8px}
 padding:10px 12px;font-size:13px}
 .imp-warn{background:#fffbf2;border-left:3px solid #e0a33c;border-radius:10px;
 padding:10px 12px;font-size:13px;margin-top:8px}
+/* 核对时的操作条：固定在底栏上方，滚到哪都能点 */
+.imp-actions{display:flex;gap:8px;margin-top:10px}
+.imp-actions.fixed{position:fixed;left:0;right:0;bottom:56px;z-index:48;margin:0 auto;
+max-width:820px;padding:8px 14px;background:rgba(255,255,255,.97);
+-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+border-top:1px solid var(--line);box-shadow:0 -5px 16px rgba(20,40,60,.07);gap:9px}
+.imp-actions.fixed .btn{flex:1 1 0;width:auto;padding:10px 10px;font-size:14px;white-space:nowrap}
+body.with-impbar{padding-bottom:150px}
+.ci-cancel{color:#93a1b0;font-size:11.5px;text-decoration:underline;cursor:pointer}
 .imp-warn b{color:#a06a12}
 .imp-warn>b{color:#a06a12}
 /* 导入前的逐项核对：值可直接改，右侧圈勾确认 */
@@ -320,7 +329,7 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
     <div id="impList" style="margin-top:10px"></div>
     <div id="impProg" style="display:none;margin-top:10px"></div>
     <div id="impResult" style="margin-top:10px"></div>
-    <div id="impActions" style="display:flex;gap:8px;margin-top:10px"></div>
+    <div id="impActions" class="imp-actions"></div>
     <div class="muted" style="font-size:11.5px;margin-top:12px;line-height:1.7">
       📌 <b>识别方式</b><br>
       ① <b>文字版 PDF</b>：浏览器本地直接读文字，最快最准，无需下载引擎<br>
@@ -876,7 +885,9 @@ const EXCL={
 };
 
 /* ---------- 进度 UI ---------- */
+let impDone=false;      // 识别已结束：迟到的引擎回调不许再把进度条翻出来
 function impProgress(msg,pct){
+  if(impDone) return;
   const el=document.getElementById('impProg');
   el.style.display='block';
   el.innerHTML=`<div style="background:#f2f6f9;border-radius:10px;padding:10px 12px;font-size:12.5px">
@@ -930,11 +941,12 @@ function loadScript(src){
 /* ---------- 核心：解析报告 ---------- */
 async function parseReports(){
   const res=document.getElementById('impResult');
-  const act=document.getElementById('impActions');
-  res.innerHTML=''; act.innerHTML='';
+  res.innerHTML=''; setImpActions('');
+  impDone=false;
   impParsed=[];
 
   impProgress('加载识别引擎…',5);
+  try{ document.getElementById('impProg').scrollIntoView({block:'center',behavior:'smooth'}); }catch(e){}
   // 依赖库优先 CDN（本站 GitHub Pages 在国内仅十几 KB/s），失败回退本站
   const VCDN='https://cdn.jsdelivr.net/npm/';
   let pdfBase=null;
@@ -943,6 +955,7 @@ async function parseReports(){
   if(!pdfBase){ try{ await loadScript('vendor/pdf.min.js'); pdfBase='vendor/'; }catch(e){} }
   try{ await loadScript('vendor/tesseract.min.js'); }
   catch(e){
+    impDone=true;
     impProgressHide();
     res.innerHTML=`<div class="imp-dup"><b>⚠️ 识别引擎加载失败</b><br>
       请确认通过网页服务访问本页（而非双击打开文件），或把报告直接发给我处理。</div>`;
@@ -1032,9 +1045,16 @@ async function parseReports(){
     if(worker) await worker.terminate();
 
     impProgress('识别完成，正在提取指标…',96);
-    setTimeout(()=>{ impProgressHide(); renderImpResult(); },300);
+    impDone=true;
+    setTimeout(()=>{
+      impProgressHide(); renderImpResult();
+      // 结果在页面下方，不滚过去用户根本看不到
+      const box=document.getElementById('impResult');
+      if(box) window.scrollTo({top:box.getBoundingClientRect().top+scrollY-12,behavior:'smooth'});
+    },300);
 
   }catch(e){
+    impDone=true;
     impProgressHide();
     const msg=e.message||'未知错误';
     res.innerHTML=/超时/.test(msg)
@@ -1728,7 +1748,7 @@ function impCommit(di,ii,el){
   }
   it._ok=true;                     // 改过即视为已核对
   el.value=it.v;
-  impPaint(di,ii,it); impProgress();
+  impPaint(di,ii,it); impCheckProgress();
 }
 
 function impMark(di,ii){
@@ -1736,7 +1756,7 @@ function impMark(di,ii){
   if(!g||!g.items[ii]) return;
   const it=g.items[ii];
   it._ok=!it._ok;
-  impPaint(di,ii,it); impProgress();
+  impPaint(di,ii,it); impCheckProgress();
 }
 
 function impGroupOk(gi){
@@ -1751,6 +1771,16 @@ function impAllOk(){
   renderImpResult();
 }
 
+/* 操作按钮固定到底栏上方：核对列表很长，按钮放在文档末尾根本看不见 */
+function setImpActions(html){
+  const act=document.getElementById('impActions');
+  if(!act) return;
+  act.innerHTML=html||'';
+  const on=!!html;
+  act.classList.toggle('fixed',on);
+  document.body.classList.toggle('with-impbar',on);
+}
+
 function impStat(){
   const groups=groupImp();
   const total=groups.reduce((s,g)=>s+g.items.length,0);
@@ -1758,10 +1788,10 @@ function impStat(){
   return {total,done};
 }
 
-function impProgress(){
+function impCheckProgress(){
   const {total,done}=impStat();
   const pg=document.getElementById('impPg');
-  if(pg) pg.innerHTML=`已核对 <b>${done}</b>/${total} 项`;
+  if(pg) pg.innerHTML=`已核对 <b>${done}</b>/${total} 项 · <span class="ci-cancel" onclick="clearImp()">取消导入</span>`;
   const go=document.getElementById('impGo');
   if(go){
     go.textContent=done>=total?`确认导入 ${total} 项`:`还有 ${total-done} 项待核对`;
@@ -1782,7 +1812,6 @@ function impGoFn(){
 
 function renderImpResult(){
   const res=document.getElementById('impResult');
-  const act=document.getElementById('impActions');
 
   const groups=groupImp();
   const allItems=groups.reduce((s,g)=>s+g.items.length,0);
@@ -1792,7 +1821,7 @@ function renderImpResult(){
     res.innerHTML=`<div class="imp-dup"><b>⚠️ 未能识别出有效指标</b><br>
       可能原因：图片清晰度不足、报告版式特殊、或识别结果与已知指标名不匹配。<br><br>
       <b>建议</b>：换成更清晰的截图/PDF 重试；或把报告直接发给我（在对话里上传），我逐页人工核对。</div>`;
-    act.innerHTML='';
+    setImpActions('');
     return;
   }
 
@@ -1841,10 +1870,8 @@ function renderImpResult(){
     }).join('');
     // 内容完全一致的，主按钮给"取消"；有不一致时反过来，让"仍要导入"更显眼
     const allSame=dups.every(d=>d.labsOnly||(!d.chg.length&&!d.add.length&&!d.del.length));
-    act.innerHTML=`<div style="flex:1 1 100%">
-      <button class="btn${allSame?'':' ghost'}" onclick="clearImp()">${allSame?'取消导入':'取消本次导入'}</button>
-      <div style="margin-top:8px"><button class="btn${allSame?' ghost':''}" onclick="impOverrideAll()">${allSame?'仍要导入':'仍要导入，逐项核对'}</button></div>
-    </div>`;
+    setImpActions(`<button class="btn${allSame?'':' ghost'}" onclick="clearImp()">${allSame?'取消导入':'取消本次导入'}</button>
+      <button class="btn${allSame?' ghost':''}" onclick="impOverrideAll()">${allSame?'仍要导入':'仍要导入，逐项核对'}</button>`);
     window._fresh=fresh;
     return;
   }
@@ -1852,7 +1879,7 @@ function renderImpResult(){
   // ② 逐项核对
   let html=`<div class="imp-ok"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
       <b>✅ 识别到 ${allItems} 项</b>
-      <span class="ci-pg" id="impPg">已核对 <b>0</b>/${allItems}</span>
+      <span class="ci-pg" id="impPg">已核对 <b>0</b>/${allItems} 项 · <span class="ci-cancel" onclick="clearImp()">取消导入</span></span>
     </div>
     <div style="margin-top:5px;font-size:11.5px;color:#5b6b7a;line-height:1.65">
       照原件核对，<b>数值可直接点开改</b>，无误点右侧 ○；全部核对完才写入${
@@ -1901,15 +1928,10 @@ function renderImpResult(){
   }
 
   res.innerHTML=html;
-  act.innerHTML=`<div style="flex:1 1 100%">
-    <div style="display:flex;gap:8px">
-      <button class="btn" id="impGo" style="flex:2" onclick="impGoFn()">还有 ${allItems} 项待核对</button>
-      <button class="btn ghost" id="impAllOk" style="flex:1.1" onclick="impAllOk()">全部一致</button>
-    </div>
-    <div style="margin-top:8px"><button class="btn ghost" onclick="clearImp()">取消本次导入</button></div>
-  </div>`;
+  setImpActions(`<button class="btn" id="impGo" style="flex:1.6" onclick="impGoFn()">还有 ${allItems} 项待核对</button>
+    <button class="btn ghost" id="impAllOk" style="flex:1" onclick="impAllOk()">全部一致</button>`);
   window._fresh=fresh;
-  impProgress();
+  impCheckProgress();
 }
 
 /* ---------- 确认写入 ---------- */
@@ -1953,7 +1975,7 @@ function confirmImport(){
   document.getElementById('impResult').innerHTML=
     `<div class="imp-ok"><b>✅ 已记录 ${msg.join('、')}</b><br>
      <span style="font-size:12px;color:#51606f">${rn} 项全部存入「记录 → 化验报告」（新增 ${newN} 项${updN?`、更新 ${updN} 项`:''}），其中 ${abnN} 项异常已标红。${fresh.length?'趋势图已更新。':''}</span></div>`;
-  document.getElementById('impActions').innerHTML=`<button class="btn ghost" onclick="clearImp()">完成</button>`;
+  setImpActions(`<button class="btn ghost" onclick="clearImp()">完成</button>`);
   impFiles=[]; impParsed=[]; impRpt=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0; impOver={};
   document.getElementById('impFile').value='';
   document.getElementById('impList').innerHTML='';
@@ -1965,7 +1987,7 @@ function confirmImport(){
 function clearImp(){
   impParsed=[]; impFiles=[]; impRpt=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0; impOver={};
   document.getElementById('impResult').innerHTML='';
-  document.getElementById('impActions').innerHTML='';
+  setImpActions('');
   document.getElementById('impList').innerHTML='';
   document.getElementById('impState').textContent='';
   document.getElementById('impFile').value='';
@@ -2069,6 +2091,9 @@ function go(p,el){
   document.querySelectorAll('nav div').forEach(x=>x.classList.remove('on'));
   el.classList.add('on');
   window.scrollTo({top:0,behavior:'smooth'});
+  // 固定操作条只在指标页显示，切到别的页收起来
+  const ib=document.getElementById('impActions');
+  if(ib) ib.style.display=(p==='chart'||!ib.classList.contains('fixed'))?'':'none';
   if(p==='chart'){ renderSeg(); drawChart(); setTimeout(()=>chart&&chart.resize(),50); }
   if(p==='med') setTimeout(renderMed,30);
   if(p==='visit') renderVisit();
