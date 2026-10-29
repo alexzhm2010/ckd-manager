@@ -258,7 +258,7 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
     <div class="imp-zone" id="impZone">
       <div class="imp-ic">📄</div>
       <div class="imp-t">点击选择报告文件</div>
-      <div class="imp-s">支持 PDF（文字版）/ 图片，可多选</div>
+      <div class="imp-s">支持 PDF / 图片，可多选，扫描件也能识别</div>
       <input type="file" id="impFile" accept=".pdf,image/*" multiple hidden>
     </div>
     <div id="impList" style="margin-top:10px"></div>
@@ -266,9 +266,10 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
     <div id="impResult" style="margin-top:10px"></div>
     <div id="impActions" style="display:flex;gap:8px;margin-top:10px"></div>
     <div class="muted" style="font-size:11.5px;margin-top:12px;line-height:1.7">
-      📌 <b>两种导入方式</b><br>
-      ① <b>文字版 PDF</b>：浏览器本地自动提取，数据不出本机，提取完可预览确认后入库<br>
-      ② <b>扫描件 / 照片 / 复杂格式</b>：本地无法可靠识别时，会提示你把文件发给我，由我逐页解析（更准）
+      📌 <b>识别方式</b><br>
+      ① <b>文字版 PDF</b>：浏览器本地直接读文字，最快最准，无需下载引擎<br>
+      ② <b>扫描件 / 手机截图</b>：本地 OCR 识别，首次需下载约 17MB 引擎，之后走缓存<br>
+      ③ <b>无论哪种都先预览</b>，核对无误再点「确认写入」；同一天同一项已存在时整批停止，不覆盖旧数据
     </div>
   </div>
   <div class="card">
@@ -774,7 +775,7 @@ const ALIAS={
   hgb:['血红蛋白','HGB'],
   alb:['白蛋白','ALB'],
   hco3:['碳酸氢盐','CO2'],
-  tc:['总胆固醇','CHOL'],
+  tc:['总胆固醇','CHOL','TC'],
   tg:['甘油三酯','TG'],
   ldl:['低密度脂蛋白','LDL'],
 };
@@ -782,7 +783,7 @@ const ALIAS={
 /* 排除词：防止别名误匹配到其他指标行（如"肌酐"误命中"白蛋白/肌酐"） */
 const EXCL={
   crea:['白蛋白','ACR','尿','胱抑素'],
-  alb:['微量','/肌酐','ACR','总蛋白','球蛋白'],
+  alb:['微量','/肌','ACR','总蛋白','球蛋白','前白蛋白'],
   ca:['离子','磷'],
   p:['PTH','甲旁'],
   k:['钠','氯','钙'],
@@ -869,41 +870,54 @@ async function parseReports(){
   }
 
   try{
-    impProgress('初始化中文识别…',10);
-    // worker(blob URL) 内相对路径会失效，全部转绝对路径
-    const BASE=new URL('vendor/', location.href).href;
-    // 90 秒超时兜底：引擎初始化失败时引导转 AI 处理
-    const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('初始化超时')),ms))]);
-    const worker=await withTimeout(Tesseract.createWorker('chi_sim',1,{
-      logger:m=>{
-        if(m.status==='recognizing text'){
-          const p=10+Math.round(m.progress*80);
-          impProgress('正在识别文字…',Math.min(p,92));
-        }
-      },
-      workerPath:BASE+'tesseract-worker.min.js',
-      corePath:BASE,
-      langPath:BASE,
-    }),90000);
-
+    // 先把文件拆成「页」：带文字层的 PDF 页直接取文字，扫描页才需要 OCR
+    impProgress('正在解析文件…',6);
     const total=impFiles.length;
-    let idx=0;
-    for(const f of impFiles){
-      idx++;
-      impProgress(`识别第 ${idx}/${total} 个文件：${f.name}`, 10);
-      const images=await fileToImages(f);
-      if(!images.length){ continue; }
+    const jobs=[];                       // [{name, pages:[{text}|{img}]}]
+    for(let i=0;i<total;i++){
+      const pages=await fileToImages(impFiles[i]);
+      if(pages.length) jobs.push({name:impFiles[i].name, pages});
+    }
+    const needOcr=jobs.some(j=>j.pages.some(p=>p.img));
+
+    let worker=null;
+    if(needOcr){
+      impProgress('初始化中文识别…',10);
+      // worker(blob URL) 内相对路径会失效，全部转绝对路径
+      const BASE=new URL('vendor/', location.href).href;
+      // 90 秒超时兜底：引擎初始化失败时引导转 AI 处理
+      const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('初始化超时')),ms))]);
+      worker=await withTimeout(Tesseract.createWorker('chi_sim',1,{
+        logger:m=>{
+          if(m.status==='recognizing text'){
+            const p=10+Math.round(m.progress*80);
+            impProgress('正在识别文字…',Math.min(p,92));
+          }
+        },
+        workerPath:BASE+'tesseract-worker.min.js',
+        corePath:BASE,
+        langPath:BASE,
+      }),90000);
+      // 保留列间距：后续靠「列首」定位结果值，空格被压缩就定位不到
+      try{ await worker.setParameters({preserve_interword_spaces:'1'}); }catch(e){}
+    }
+
+    for(let idx=0;idx<jobs.length;idx++){
+      const job=jobs[idx];
+      impProgress(`识别第 ${idx+1}/${jobs.length} 个文件：${job.name}`, 10+Math.round(idx/jobs.length*20));
       let fullText='';
-      for(let i=0;i<images.length;i++){
-        if(images.length>1){
-          impProgress(`第 ${idx}/${total} 个 · 第 ${i+1}/${images.length} 页`, 10+Math.round((i/images.length)*80));
+      for(let i=0;i<job.pages.length;i++){
+        const pg=job.pages[i];
+        if(job.pages.length>1){
+          impProgress(`第 ${idx+1}/${jobs.length} 个 · 第 ${i+1}/${job.pages.length} 页`, 20+Math.round((i/job.pages.length)*70));
         }
-        const r=await worker.recognize(images[i]);
+        if(pg.text){ fullText += '\n' + pg.text; continue; }
+        const r=await worker.recognize(pg.img);
         fullText += '\n' + (r.data.text||'');
       }
-      extractFromText(fullText, f.name);
+      extractFromText(fullText, job.name);
     }
-    await worker.terminate();
+    if(worker) await worker.terminate();
 
     impProgress('识别完成，正在提取指标…',96);
     setTimeout(()=>{ impProgressHide(); renderImpResult(); },300);
@@ -915,11 +929,84 @@ async function parseReports(){
   }
 }
 
-/* 文件 → 图片数组（PDF 渲染为 canvas，图片直接读） */
+/* 文件 → 图片数组（PDF 渲染为 canvas，图片直接读）
+   倍率按「目标宽度 ~2200px」自适应：报告类扫描图本身已够清晰，
+   盲目放大会让笔画插值发虚、识别置信度反而下降，还更慢更耗内存。 */
+const TARGET_W = 2200;
+
+function enhanceCanvas(canvas){
+  const ctx=canvas.getContext('2d');
+  if(!ctx) return canvas;
+  let img;
+  try{ img=ctx.getImageData(0,0,canvas.width,canvas.height); }catch(e){ return canvas; }
+  const d=img.data;
+  const hist=new Uint32Array(256);
+  for(let i=0;i<d.length;i+=4){
+    hist[((d[i]*299+d[i+1]*587+d[i+2]*114)/1000)|0]++;
+  }
+  const total=d.length/4;
+  let lo=0,hi=255,acc=0;
+  for(let i=0;i<256;i++){ acc+=hist[i]; if(acc>total*0.02){ lo=i; break; } }
+  acc=0;
+  for(let i=255;i>=0;i--){ acc+=hist[i]; if(acc>total*0.02){ hi=i; break; } }
+  // 已经黑白分明（白底黑字）就不动，避免破坏清晰截图
+  if(hi>=235&&lo<=45) return canvas;
+  if(hi-lo<40) return canvas;
+  lo=Math.max(0,lo-8); hi=Math.min(255,hi+8);
+  const k=255/(hi-lo);
+  for(let i=0;i<d.length;i+=4){
+    let v=((d[i]*299+d[i+1]*587+d[i+2]*114)/1000-lo)*k;
+    v=v<0?0:v>255?255:v;
+    d[i]=d[i+1]=d[i+2]=v;
+  }
+  ctx.putImageData(img,0,0);
+  return canvas;
+}
+
+/* 按目标宽度算缩放，并限制总像素防止爆内存 */
+function fitScale(w,h){
+  let s = TARGET_W/w;
+  const MAXPX = 12e6;
+  if (w*s*h*s > MAXPX) s = Math.sqrt(MAXPX/(w*h));
+  return Math.min(3.5, Math.max(0.5, s));
+}
+
+/* 带文字层的 PDF：按 y 坐标还原成行，直接取文字（比 OCR 快且 100% 准） */
+async function pdfPageText(page){
+  let tc;
+  try{ tc=await page.getTextContent(); }catch(e){ return ''; }
+  const items=(tc.items||[]).filter(it=>it.str&&it.str.trim());
+  if(items.length<20) return '';
+  const rows=[];
+  for(const it of items){
+    const y=it.transform[5], x=it.transform[4];
+    let row=rows.find(r=>Math.abs(r.y-y)<=3.5);
+    if(!row){ row={y, cells:[]}; rows.push(row); }
+    row.cells.push({x, s:it.str});
+  }
+  rows.sort((a,b)=>b.y-a.y);
+  return rows.map(r=>r.cells.sort((a,b)=>a.x-b.x).map(c=>c.s).join('  ')).join('\n');
+}
+
+/* 文件 → 页数组 [{text}]（有文字层）或 [{img}]（需要 OCR） */
 async function fileToImages(file){
   const isPdf=/\.pdf$/i.test(file.name)||file.type==='application/pdf';
   if(!isPdf){
-    return [await fileToDataURL(file)];
+    const url=await fileToDataURL(file);
+    return [await new Promise((res)=>{
+      const im=new Image();
+      im.onload=()=>{
+        const k=fitScale(im.width, im.height);
+        const c=document.createElement('canvas');
+        c.width=Math.round(im.width*k); c.height=Math.round(im.height*k);
+        const cx=c.getContext('2d');
+        cx.fillStyle='#fff'; cx.fillRect(0,0,c.width,c.height);
+        cx.drawImage(im,0,0,c.width,c.height);
+        res({img:enhanceCanvas(c).toDataURL('image/png')});
+      };
+      im.onerror=()=>res({img:url});
+      im.src=url;
+    })];
   }
   const buf=await file.arrayBuffer();
   const pdf=await pdfjsLib.getDocument({data:buf}).promise;
@@ -927,13 +1014,16 @@ async function fileToImages(file){
   const maxPages=Math.min(pdf.numPages, 30);
   for(let p=1;p<=maxPages;p++){
     const page=await pdf.getPage(p);
-    const vp=page.getViewport({scale:2.0});
+    const txt=await pdfPageText(page);
+    if(txt.replace(/\s/g,'').length>40){ out.push({text:txt}); continue; }
+    const base=page.getViewport({scale:1});
+    const vp=page.getViewport({scale:fitScale(base.width, base.height)});
     const canvas=document.createElement('canvas');
-    canvas.width=vp.width; canvas.height=vp.height;
+    canvas.width=Math.round(vp.width); canvas.height=Math.round(vp.height);
     const ctx=canvas.getContext('2d');
     ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
     await page.render({canvasContext:ctx,viewport:vp}).promise;
-    out.push(canvas.toDataURL('image/png'));
+    out.push({img:enhanceCanvas(canvas).toDataURL('image/png')});
   }
   return out;
 }
@@ -946,46 +1036,77 @@ function fileToDataURL(file){
   });
 }
 
+/* OCR 文本归一化：只在同一行内去空格，绝不跨行合并（跨行会把不同项目粘成一句） */
+function ocrNormalize(text){
+  let t=text||'';
+  t=t.replace(/(\d)\.[ \t]+(\d)/g,'$1.$2');                      // 33. 20 → 33.20
+  t=t.replace(/([\u4e00-\u9fa5（）：:/－-])[ \t]+(?=[\u4e00-\u9fa5（）：:/－-])/g,'$1'); // 中文间空格
+  t=t.replace(/([\u4e00-\u9fa5])[ \t]+(?=\d)/g,'$1');            // 中文+数字
+  t=t.replace(/(\d)[ \t]+(?=[\u4e00-\u9fa5])/g,'$1');            // 数字+中文
+  return t;
+}
+
+/* 在指标名之后的片段里挑出「结果值」：
+   1) 紧贴名称的数字（列结构里结果紧跟项目名）
+   2) 否则取第一个「列首」数字（前面是列间距），跳过被误识成数字的 ↑↓ 箭头 */
+function pickValue(line, from){
+  const seg=line.slice(from, from+110);
+  const re=/\d+(?:\.\d+)?/g;
+  let m, near=null, col=null;
+  while((m=re.exec(seg))){
+    const v=parseFloat(m[0]);
+    if(!isFinite(v)||v>20000) continue;
+    if(/^\d{6,}$/.test(m[0])) continue;                  // 纯编号
+    if(v>=1900&&v<=2100) continue;                       // 年份
+    const start=m.index, end=start+m[0].length;
+    const prev=seg.slice(Math.max(0,start-3),start);
+    if(/[-~～至<>≤≥]\s*$/.test(prev)) continue;           // 区间右端 / 阈值
+    const before=seg.slice(0,start);
+    const isCol = start===0 || /[ \t]{2,}$/.test(before);
+    const rec={v,start,end};
+    if(start<=10 && !near) near=rec;
+    if(isCol && !col) col=rec;
+  }
+  const pick=near||col;
+  if(!pick) return null;
+  let score=5;
+  const tail=seg.slice(pick.end, pick.end+22);
+  if(/^\s*\d+(?:\.\d+)?\s*[-~～]\s*\d/.test(tail)) score+=4;   // 后面紧跟参考区间
+  return {v:pick.v, score};
+}
+
 /* 从 OCR 文本提取日期与指标值 */
 function extractFromText(text, src){
   if(!text||text.trim().length<10) return;
 
-  // OCR 归一化：中文字间空格去除、小数点后空格修复
-  let t=text;
-  t=t.replace(/(\d)\.\s+(\d)/g,'$1.$2');                       // 33. 20 → 33.20
-  t=t.replace(/([\u4e00-\u9fa5（）：:/－-])\s+(?=[\u4e00-\u9fa5（）：:/－-])/g,'$1'); // 中文间空格
-  t=t.replace(/([\u4e00-\u9fa5])\s+(?=\d)/g,'$1');             // 中文+数字
-  t=t.replace(/(\d)\s+(?=[\u4e00-\u9fa5])/g,'$1');             // 数字+中文
-
+  const t=ocrNormalize(text);
   const date=findDate(t);
-
-  // 逐行扫描，提升准确率：优先取指标名同行的数值
   const lines=t.split(/[\n\r]+/).map(l=>l.trim()).filter(Boolean);
 
   for(const key of Object.keys(ALIAS)){
     if(!META[key]) continue;
     if(impParsed.some(x=>x.key===key&&x.date===date)) continue;
-    const aliases=ALIAS[key];
-    let val=null;
+    const aliases=ALIAS[key].map(a=>a.toLowerCase());
+    let best=null;
+
     for(const line of lines){
-      const hit=aliases.find(a=>line.includes(a));
-      if(!hit) continue;
-      // 排除词保护
-      if((EXCL[key]||[]).some(x=>line.includes(x))) continue;
-      // 该行内的数字（排除指标名里的数字）
-      const seg=line.slice(line.indexOf(hit)+hit.length);
-      const nums=[...seg.matchAll(/-?\d+(?:\.\d+)?/g)].map(m=>parseFloat(m[0]));
-      if(!nums.length) continue;
-      // 取第一个在合理范围的数
-      for(const n of nums){
-        if(!isFinite(n)) continue;
-        if(n>20000) continue;
-        val=n; break;
+      const low=line.toLowerCase();
+      for(const a of aliases){
+        let idx=low.indexOf(a);
+        while(idx>=0){
+          // 排除词只看命中点附近的上下文，避免双栏同一行互相干扰
+          const win=low.slice(Math.max(0,idx-8), idx+a.length+20);
+          const blocked=(EXCL[key]||[]).some(x=>win.includes(x.toLowerCase()));
+          if(!blocked){
+            const r=pickValue(line, idx+a.length);
+            if(r&&(!best||r.score>best.score)) best=r;
+          }
+          idx=low.indexOf(a, idx+1);
+        }
       }
-      if(val!=null) break;
     }
-    if(val!=null){
-      impParsed.push({date:date||'',key,v:val,src});
+    if(best&&best.score>=3){
+      impParsed.push({date:date||'',key,v:best.v,src});
     }
   }
 }
@@ -1019,7 +1140,7 @@ function renderImpResult(){
   if(!impParsed.length){
     res.innerHTML=`<div class="imp-dup"><b>⚠️ 未能识别出有效指标</b><br>
       可能原因：图片清晰度不足、报告版式特殊、或识别结果与已知指标名不匹配。<br><br>
-      <b>建议</b>：把报告直接发给我（在对话里上传），我逐页人工核对，准确率更高。</div>`;
+      <b>建议</b>：换成更清晰的截图/PDF 重试；或把报告直接发给我（在对话里上传），我逐页人工核对。</div>`;
     act.innerHTML='';
     return;
   }
