@@ -1763,10 +1763,24 @@ function keyOfName(n){
   }
   return null;
 }
-/* 同名项目按「名称+单位」判等；同名不同单位（如尿蛋白定性/定量）是两项，不能合并 */
-const sameItem=(a,b)=>a.n===b.n&&(a.u||'')===(b.u||'');
-/* 数值+单位+参考区间的签名，用于重复导入比对 */
-const itemSig=x=>[x.v,x.u==null?'':x.u,x.lo==null?'':x.lo,x.hi==null?'':x.hi].join('|');
+/* 名称/单位归一：同一项在 PDF 文字层和 OCR 里常只差空格、星号、上标写法
+   （如「白细胞计数*」vs「白细胞计数」、「10^9/L」vs「10⁹/L」） */
+const normName=n=>String(n||'').replace(/[\s*＊]/g,'').replace(/[（(][^（）()]*[)）]/g,'');
+const normUnit=u=>String(u||'').replace(/[\s×*^·]/g,'')
+  .replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]/g,c=>String('⁰¹²³⁴⁵⁶⁷⁸⁹'.indexOf(c)))
+  .replace(/[μµ]/g,'u').toUpperCase();
+const valKind=v=>typeof v==='number'?'n':'s';
+
+/* 同一项：名称归一后相同，且单位一致；一侧没读到单位时，只要结果类型一致也算同一项 */
+const sameItem=(a,b)=>{
+  if(normName(a.n)!==normName(b.n)) return false;
+  const ua=normUnit(a.u), ub=normUnit(b.u);
+  if(ua===ub) return true;
+  if(!ua||!ub) return valKind(a.v)===valKind(b.v);   // 尿蛋白定性(2+)与定量(2.3) 类型不同，仍是两项
+  return false;
+};
+/* 数值+单位+参考区间的签名，用于重复导入比对（单位按归一后的写法比较） */
+const itemSig=x=>[x.v,normUnit(x.u),x.lo==null?'':x.lo,x.hi==null?'':x.hi].join('|');
 
 /* 把本次识别出的多份报告按日期合并 */
 function groupImp(){
@@ -1794,9 +1808,15 @@ function impDup(){
   for(const g of groupImp()){
     if(!g.date) continue;
     const all=rptItems(g.date);
-    // 只跟「同名同单位项目」比：同一天可能有生化、血常规两份报告，互不算重复
-    const old=all.filter(o=>g.items.some(it=>sameItem(it,o)));
-    if(all.length&&!old.length) continue;      // 同日的另一份报告，直接往下走
+    // 先按「名称+单位」严格匹配；一个都对不上时，再按名称粗匹配判断是不是同一份报告
+    let old=all.filter(o=>g.items.some(it=>sameItem(it,o)));
+    let fuzzy=false, matched=old.length;
+    if(all.length&&!old.length){
+      const near=all.filter(o=>g.items.some(it=>normName(it.n)===normName(o.n)));
+      // 同日另一份报告（如生化 vs 血常规）通常一个名字都对不上，只有 ≥3 项同名才当作「同一份但写法不同」
+      if(near.length<3) continue;
+      old=near; fuzzy=true; matched=near.length;
+    }
     if(!all.length){
       // 没有整份报告，但这一天可能手动记过几项指标
       const L=DB.labs&&DB.labs[g.date]||{};
@@ -1809,14 +1829,23 @@ function impDup(){
       continue;
     }
     const chg=[], add=[], del=[];
-    for(const it of g.items){
-      const o=old.find(x=>sameItem(x,it));
-      if(!o) add.push({n:it.n, now:it.v});
-      // 数值、单位、参考区间任一变化都算「不同」：单位从 μmol/L 变 mg/dL 时数值相同也不能当重复
-      else if(itemSig(o)!==itemSig(it)) chg.push({n:it.n, now:it.v, old:o.v});
+    if(fuzzy){
+      // 粗匹配时不看单位也不看「这次没读到」：写法差异会让所有项都像新增/缺失
+      for(const it of g.items){
+        const o=old.find(x=>normName(x.n)===normName(it.n));
+        if(!o) add.push({n:it.n, now:it.v});
+        else if(String(o.v)!==String(it.v)) chg.push({n:it.n, now:it.v, old:o.v});
+      }
+    }else{
+      for(const it of g.items){
+        const o=old.find(x=>sameItem(x,it));
+        if(!o) add.push({n:it.n, now:it.v});
+        // 数值、单位、参考区间任一变化都算「不同」：单位从 μmol/L 变 mg/dL 时数值相同也不能当重复
+        else if(itemSig(o)!==itemSig(it)) chg.push({n:it.n, now:it.v, old:o.v});
+      }
+      for(const o of old) if(!g.items.some(x=>sameItem(x,o))) del.push({n:o.n, old:o.v});
     }
-    for(const o of old) if(!g.items.some(x=>sameItem(x,o))) del.push({n:o.n, old:o.v});
-    out.push({date:g.date, oldN:old.length, newN:g.items.length, chg, add, del});
+    out.push({date:g.date, oldN:all.length, matched, newN:g.items.length, chg, add, del, fuzzy});
   }
   return out;
 }
@@ -2009,6 +2038,9 @@ function renderImpResult(){
             d.add.length?`；${d.add.length} 项是这次新读到的`:
             d.del.length?`；档案里 ${d.del.length} 项这次没读到`:''}。
         </div>
+        ${d.fuzzy?`<div style="margin-top:6px;font-size:11.5px;line-height:1.8;color:#8a6a1a">
+          ⚠ 档案里这份报告的项目名/单位与本次识别结果写法不同（常见于 PDF 文字层与截图 OCR 的差异），
+          已按名称粗匹配 <b>${d.matched}</b> 项。如果就是同一份，直接取消即可。</div>`:''}
         ${d.chg.length?`<div style="margin-top:6px;font-size:11.5px;line-height:1.85;color:#8a6a1a">
           ${d.chg.slice(0,6).map(x=>`· ${x.n}：档案 <b>${x.old}</b> → 本次 <b>${x.now}</b>`).join('<br>')}
           ${d.chg.length>6?`<br>…另有 ${d.chg.length-6} 项`:''}
@@ -2036,6 +2068,15 @@ function renderImpResult(){
         allAbn?`（<span style="color:#d93a3a">${allAbn} 项超出参考范围</span>）`:''}。
     </div>
   </div>`;
+
+  // 同一天已有报告、但项目名对不上（会被当成第二份）：给个提示，别让用户以为没做过
+  const sameDay=groups.filter(g=>g.date&&!impOver[g.date]&&rptItems(g.date).length&&!dups.some(d=>d.date===g.date));
+  if(sameDay.length){
+    html+=`<div class="ci-un" style="background:#fdf7ec;border-left-color:#c08a00;color:#8a6a1a">
+      <b>ℹ️ ${sameDay.map(g=>g.date).join('、')}</b> 这天档案里已有报告（${
+        sameDay.map(g=>rptItems(g.date).length+' 项').join('、')}），但本次识别的项目与它对不上，
+      导入后会成为同一天的第二份记录。若其实是同一份，请先「取消导入」。</div>`;
+  }
 
   html+=groups.map((g,gi)=>{
     const abn=g.items.filter(isAbn);
