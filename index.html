@@ -1044,7 +1044,9 @@ let logLimit=20;                 // 近期记录默认 20 条，可继续加载�
 function moreLogs(){ logLimit+=20; renderLogs(); }
 function renderLogs(){
   const el=document.getElementById('logList');
-  const arr=DB.logs.slice(0,logLimit);
+  // 按日期倒序（同一天按写入时间倒序）：报告批量导入后写入顺序不等于时间顺序
+  const all=(DB.logs||[]).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))||((b.ts||0)-(a.ts||0)));
+  const arr=all.slice(0,logLimit);
   if(!arr.length){ el.innerHTML='<div class="empty">还没有记录，从上面开始记录吧</div>'; return; }
   el.innerHTML=arr.map(l=>{
     let c='';
@@ -1055,8 +1057,8 @@ function renderLogs(){
     if(l.type==='lab') c=`${META[l.key]?META[l.key].n:l.key} = ${l.v}`;
     return `<div class="list-item"><div class="dt">${dateStr(l.date)}</div><div>${c}</div></div>`;
   }).join('')
-  + (DB.logs.length>logLimit
-      ? `<div style="text-align:center;margin-top:10px"><button class="mini" onclick="moreLogs()">显示更多（还有 ${DB.logs.length-logLimit} 条）</button></div>`
+  + (all.length>logLimit
+      ? `<div style="text-align:center;margin-top:10px"><button class="mini" onclick="moreLogs()">显示更多（还有 ${all.length-logLimit} 条）</button></div>`
       : '');
   // 饮水统计
   const w=DB.logs.filter(x=>x.type==='water'&&x.date===today()).reduce((s,x)=>s+x.cups,0);
@@ -3562,7 +3564,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.5.1 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.5.2 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
