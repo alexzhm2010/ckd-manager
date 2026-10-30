@@ -913,6 +913,27 @@ async function seedHistoryPrompt(){
   toast(`已导入 ${seed.length} 条历史数据，正在上传…`);
 }
 
+/* 云端账号还空着、而本机带着加密历史基线时，登录后主动问一次访问密码。
+   历史基线随仓库分发，任何设备都有；只有访问密码能解开，所以必须问用户。 */
+async function maybeSeedHistory(){
+  if(!CLOUD_ON||!cloudUser) return;
+  if(FACTS.some(r=>r&&r.kind==='lab')) return;
+  if(typeof ENCRYPTED_DATA==='undefined') return;
+  if(sessionStorage.getItem('seed_history_asked')) return;
+  sessionStorage.setItem('seed_history_asked','1');
+  const pwd=prompt('云端账号里还没有指标数据。\n本机带有加密的历史基线，输入原来的访问密码即可一次性导入并同步到云端（只需一次，之后不用再输）：');
+  if(!pwd) return;
+  const H=await tryDecryptHistory(pwd);
+  if(!H){ toast('密码不正确，可稍后在「数据存储」里重新导入'); return; }
+  window.HISTORY=H;
+  const seed=historyFacts(H).filter(r=>!FACTMAP.has(r.uid));
+  if(!seed.length){ toast('历史数据已全部在云端，无需重复导入'); return; }
+  applyFacts(mergeFacts(FACTS,seed));
+  renderLogs(); renderRpt(); renderHome(); renderVisit(); drawChart(); renderCloud();
+  queueCloudSync(seed,[]);
+  toast(`已导入 ${seed.length} 条历史指标，正在同步…`);
+}
+
 /* ==================== 云端状态卡片 ==================== */
 function renderCloud(){
   const box=document.getElementById('cloudBox');
@@ -932,9 +953,11 @@ function renderCloud(){
   }
   tag.textContent=cloudFlushing?'同步中…':(cloudErrMsg?'同步失败':'已连接');
   const when=cloudLastSync?('上次同步 '+new Date(cloudLastSync).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})):'本次尚未同步';
+  const hasLab=FACTS.some(r=>r&&r.kind==='lab');
   box.innerHTML=`<div class="muted">账号 ${esc(cloudUser.email||'')}</div>
     <div class="muted">${when}</div>
     ${cloudErrMsg?`<div class="imp-dup" style="margin-top:8px">同步失败：${esc(cloudErrMsg)}</div>`:''}
+    ${!hasLab?`<div class="imp-warn" style="margin-top:8px">云端还没有指标数据。本机如带有加密的历史基线，点「导入本机历史」并输入原来的访问密码，即可一次性同步。</div>`:''}
     <div class="imp-actions" style="margin-top:12px">
       <button class="btn ghost" onclick="cloudSyncNow()">立即同步</button>
       <button class="btn ghost" onclick="seedHistoryPrompt()">导入本机历史</button>
@@ -2857,6 +2880,7 @@ async function initApp(){
   renderLogs(); renderRpt(); renderKSym(); renderKnow(); initImport(); renderCloud();
   if(window.__echartsReady) await window.__echartsReady;
   renderHome();
+  await maybeSeedHistory();
 }
 window.addEventListener('resize',()=>{ chart&&chart.resize(); medChart&&medChart.resize(); });
 
