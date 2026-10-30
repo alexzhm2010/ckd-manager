@@ -7,6 +7,7 @@
 --   kind = 'lab'    每一行是一天一个追踪指标（会进趋势图）
 --   kind = 'rpt'    每一行是某份报告里的一个检验项目（含正常项）
 --   kind = 'block'  用药/复查/症状/日志等整块数据，一行一份
+--   kind = 'alias'  学到的别名映射：uid = alias|归一化写法，key = 规范指标键
 --
 -- 在 Supabase 控制台的 SQL Editor 里整段执行即可。
 -- ============================================================
@@ -18,6 +19,7 @@ create table if not exists public.facts (
   kind        text not null,               -- lab / rpt / block
   date        text,                        -- 统一按 YYYY-MM-DD 文本保存
   key         text,                        -- 追踪指标 key（egfr、crea…）
+  canon       text,                        -- 规范指标键：同指标不同写法归到这里
   name        text,
   value_num   double precision,            -- 数值型结果
   value_text  text,                        -- 非数值结果（如 2+、阴性）
@@ -35,6 +37,9 @@ create table if not exists public.facts (
 
 create index if not exists facts_user_kind_date_idx
   on public.facts (user_id, kind, date desc);
+
+create index if not exists facts_user_canon_date_idx
+  on public.facts (user_id, canon, date desc);
 
 -- 每个账号只能看到自己的行
 alter table public.facts enable row level security;

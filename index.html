@@ -162,10 +162,15 @@ border-radius:0;flex:0 0 auto}
 background:#f5f9fc;border:1px solid #dbe3ea;color:#3d4b59;font-weight:600}
 .ci-row.hi .ci-in{color:#d93a3a}
 .ci-row.lo .ci-in{color:#0b6e99}
-.ci-u{color:#9aa7b4;font-size:10px;flex:0 0 34px;overflow:hidden;white-space:nowrap}
+.ci-u{color:#9aa7b4;font-size:10px;flex:0 0 30px;overflow:hidden;white-space:nowrap}
 .ci-ok{width:22px;height:22px;border-radius:50%;border:1px solid #c9d4de;background:#fff;
 color:#b3bfcb;font-size:11px;line-height:1;padding:0;flex:0 0 auto;cursor:pointer}
 .ci-ok.on{background:#e6f7ee;border-color:#7cc79a;color:#1a9e63;font-weight:700}
+/* 归属指标：不同医院写法不同时，在这里指回档案里的指标，确认后记住 */
+.ci-c{flex:0 0 72px;width:72px;height:22px;font-size:10.5px;line-height:1;padding:0 1px;
+border:1px solid #e3e9ef;border-radius:7px;background:#f7fafc;color:#7b8794;
+font-family:inherit;outline:none}
+.ci-c.set{background:#eef5fd;border-color:#bcd6ee;color:#2f6fb5;font-weight:600}
 .ci-un{background:#fdf2f2;border-left:3px solid var(--red);border-radius:9px;padding:6px 10px;
 font-size:11.5px;color:#8a5a5a;margin-top:8px;line-height:1.65}
 .ci-un b{color:#d93a3a}
@@ -640,7 +645,7 @@ function historyFacts(H){
       if(!isFinite(v)) return;
       const m=META[key]||{};
       out.push({
-        uid:'lab|'+x.date+'|'+key, kind:'lab', date:x.date, key,
+        uid:'lab|'+x.date+'|'+key, kind:'lab', date:x.date, key, canon:key,
         name:m.n||key, value:v, unit:m.u||'',
         ref_lo:m.ref?m.ref[0]:null, ref_hi:m.ref?m.ref[1]:null,
         flag:flagOf(v,m), source:'seed', updated_at:1, created_at:1
@@ -689,7 +694,7 @@ function deriveFacts(db,touch){
       const prev=FACTMAP.get(uid);
       const changed=!prev||prev.value!==v;
       rows.push({
-        uid, kind:'lab', date, key, name:m.n||key, value:v, unit:m.u||'',
+        uid, kind:'lab', date, key, canon:key, name:m.n||key, value:v, unit:m.u||'',
         ref_lo:m.ref?m.ref[0]:null, ref_hi:m.ref?m.ref[1]:null,
         flag:flagOf(v,m),
         source:prev&&!changed?(prev.source||'manual'):'manual',
@@ -705,13 +710,16 @@ function deriveFacts(db,touch){
       if(!it||!it.n) return;
       const uid=rptUid(date,it);
       const prev=FACTMAP.get(uid);
+      // 规范键：优先用核对时指定的归属，其次是学到的别名 / 静态别名表
+      const canon=canonOf(it);
       const lo=it.lo==null?null:Number(it.lo);
       const hi=it.hi==null?null:Number(it.hi);
       const changed=!prev||prev.name!==it.n||prev.value!==it.v||
         (prev.unit||'')!==(it.u||'')||prev.ref_lo!==lo||prev.ref_hi!==hi||
+        (prev.canon||'')!==canon||
         (prev.flag||null)!==(it.st||null)||(prev.raw==null?null:prev.raw)!==(it.raw==null?null:Number(it.raw));
       rows.push({
-        uid, kind:'rpt', date, name:it.n, value:it.v, unit:it.u||'',
+        uid, kind:'rpt', date, canon, name:it.n, value:it.v, unit:it.u||'',
         ref_lo:lo, ref_hi:hi, flag:it.st||null,
         raw:it.raw==null?null:Number(it.raw),
         meta:{ord:i},
@@ -727,6 +735,7 @@ function deriveFacts(db,touch){
 function applyFacts(rows){
   FACTS=rows.slice();
   FACTMAP=new Map(rows.filter(r=>r&&r.uid).map(r=>[r.uid,r]));
+  buildCanonMap(rows);
   const db=blankDb();
   const rptBox={};
   rows.forEach(r=>{
@@ -736,6 +745,7 @@ function applyFacts(rows){
     }else if(r.kind==='rpt'&&r.date){
       const it={n:r.name,v:r.value,u:r.unit||'',lo:r.ref_lo,hi:r.ref_hi,st:r.flag||undefined};
       if(r.raw!=null) it.raw=r.raw;
+      if(r.canon&&META[r.canon]) it.cn=r.canon;   // 只保留真正的规范指标 key
       (rptBox[r.date]=rptBox[r.date]||[]).push({it,ord:(r.meta&&r.meta.ord)||0});
     }else if(r.kind==='block'&&r.key){
       db[r.key]=r.meta&&r.meta.data!==undefined?r.meta.data:
@@ -769,6 +779,8 @@ function rebuildIndex(rows){
 function persistFacts(){
   const prevMap=FACTMAP;
   const rows=deriveFacts(DB,true);
+  // 别名映射行不是从 DB 推导出来的，必须原样带上，否则一改数据就被当成「已删除」
+  prevMap.forEach((r,uid)=>{ if(r&&r.kind==='alias') rows.push(r); });
   const next=new Map(rows.map(r=>[r.uid,r]));
   const up=[], del=[];
   rows.forEach(r=>{
@@ -786,6 +798,7 @@ function persistFacts(){
 function localHydrate(){
   let rows=readFactCache();
   FACTMAP=new Map(rows.map(r=>[r.uid,r]));
+  buildCanonMap(rows);          // 先认下本地缓存的别名，后面的推导才能用上
   rows=mergeFacts(rows,historyFacts(window.HISTORY));
   FACTMAP=new Map(rows.map(r=>[r.uid,r]));
   rows=mergeFacts(rows,deriveFacts(DB,false));
@@ -803,7 +816,7 @@ async function getSupabase(){
 function toCloudRow(r){
   return {
     user_id:(cloudUser&&cloudUser.id)||undefined,
-    uid:r.uid, kind:r.kind, date:r.date||null, key:r.key||null, name:r.name||null,
+    uid:r.uid, kind:r.kind, date:r.date||null, key:r.key||null, canon:r.canon||null, name:r.name||null,
     value_num:typeof r.value==='number'&&isFinite(r.value)?r.value:null,
     value_text:typeof r.value==='number'?null:(r.value==null?null:String(r.value)),
     unit:r.unit||null,
@@ -818,7 +831,7 @@ function toCloudRow(r){
 }
 function fromCloudRow(x){
   return {
-    uid:x.uid, kind:x.kind, date:x.date||null, key:x.key||null, name:x.name||null,
+    uid:x.uid, kind:x.kind, date:x.date||null, key:x.key||null, canon:x.canon||null, name:x.name||null,
     value:x.value_num!=null?x.value_num:x.value_text,
     unit:x.unit||'', ref_lo:x.ref_lo, ref_hi:x.ref_hi, flag:x.flag||null,
     raw:x.raw, meta:x.meta||{},
@@ -1346,6 +1359,14 @@ const ALIAS={
   tc:['总胆固醇','CHOL','TC'],
   tg:['甘油三酯','TG'],
   ldl:['低密度脂蛋白','LDL'],
+};
+
+/* 核对表里「归属指标」下拉的短名，地方窄 */
+const SHORT={
+  egfr:'eGFR', crea:'肌酐', upro:'24h尿蛋白', acr:'ACR', malb:'微量白蛋白',
+  k:'血钾', ua:'尿酸', hco3:'碳酸氢盐', ca:'血钙', p:'血磷', pth:'PTH',
+  hgb:'血红蛋白', alb:'白蛋白', urea:'尿素', cysc:'胱抑素C',
+  tc:'总胆固醇', tg:'甘油三酯', ldl:'LDL'
 };
 
 /* 排除词：防止别名误匹配到其他指标行（如"肌酐"误命中"白蛋白/肌酐"） */
@@ -2128,7 +2149,7 @@ function renderRpt(){
    （那天手动补录、且不在这份报告里的指标不动） */
 function delRpt(d){
   if(!confirm(`删除 ${d} 的整份报告？\n这一天的报告项目和对应趋势数据会一起删除，无法恢复。`)) return;
-  const keys=new Set(rptItems(d).map(it=>keyOfName(it.n)).filter(k=>k&&META[k]));
+  const keys=new Set(rptItems(d).map(it=>canonOf(it)).filter(k=>k&&META[k]));
   if(DB.rpt&&DB.rpt[d]!=null) delete DB.rpt[d];
   if(DB.labs&&DB.labs[d]){
     keys.forEach(k=>{ delete DB.labs[d][k]; });
@@ -2208,14 +2229,76 @@ const normUnit=u=>String(u||'').replace(/[\s×*^·]/g,'')
   .replace(/[μµ]/g,'u').toUpperCase();
 const valKind=v=>typeof v==='number'?'n':'s';
 
-/* 同一项：名称归一后相同，且单位一致；一侧没读到单位时，只要结果类型一致也算同一项 */
-const sameItem=(a,b)=>{
-  if(normName(a.n)!==normName(b.n)) return false;
+/* 学到的别名（不同医院的写法）：归一化写法 → 规范指标 key。
+   存在 facts 表里（kind='alias'），跟账号走；换设备、换浏览器都还在 */
+let CANONMAP=new Map();
+const aliasKey=n=>String(normName(n)||'').toLowerCase();
+function buildCanonMap(rows){
+  CANONMAP=new Map();
+  (rows||[]).forEach(r=>{
+    if(!r||r.kind!=='alias'||!r.key||!META[r.key]) return;
+    const a=aliasKey(r.name||'');
+    if(a) CANONMAP.set(a,r.key);
+  });
+}
+/* 写法 → 规范指标 key：先查学到的别名，再用静态别名表兜底 */
+function resolveCanon(n){
+  const nm=aliasKey(n);
+  if(!nm) return null;
+  if(CANONMAP.has(nm)) return CANONMAP.get(nm);
+  return keyOfName(n);
+}
+/* 一项的规范键：核对时指定的归属 > 学到的别名 > 静态别名 > 归一化名称（未归类） */
+const canonOf=x=>{
+  if(!x) return '';
+  if(x.cn&&META[x.cn]) return x.cn;
+  return resolveCanon(x.n)||normName(x.n);
+};
+/* 学习一条别名，并把档案里已有的同名报告项改成新归属（老数据立刻归并）。
+   key 传 null 表示取消归属 */
+function learnAlias(name,key){
+  const a=aliasKey(name);
+  if(!a) return;
+  const uid='alias|'+a;
+  const prev=FACTMAP.get(uid)||null;
+  const want=key&&META[key]?key:null;
+  let touched=0, changed=false;
+
+  Object.keys(DB.rpt||{}).forEach(d=>{
+    (rptItems(d)||[]).forEach(it=>{
+      if(aliasKey(it.n)!==a) return;
+      if(want){ if(it.cn!==want){ it.cn=want; touched++; } }
+      else if(it.cn){ delete it.cn; touched++; }
+    });
+  });
+
+  if(want&&(!prev||prev.key!==want)){
+    const row={uid,kind:'alias',key:want,name:String(name||'').trim(),value:null,
+      meta:{},source:'manual',created_at:prev?prev.created_at:Date.now(),updated_at:Date.now()};
+    FACTS=FACTS.filter(r=>r.uid!==uid).concat(row);
+    FACTMAP.set(uid,row); CANONMAP.set(a,want);
+    queueCloudSync([row],[]);
+    changed=true;
+  }else if(!want&&prev){
+    FACTS=FACTS.filter(r=>r.uid!==uid);
+    FACTMAP.delete(uid); CANONMAP.delete(a);
+    queueCloudSync([],[uid]);
+    changed=true;
+  }
+  if(changed||touched) save();
+}
+
+/* 单位是否可视为同一项：一致，或一侧没读到单位但结果类型一致 */
+const unitsOk=(a,b)=>{
   const ua=normUnit(a.u), ub=normUnit(b.u);
   if(ua===ub) return true;
-  if(!ua||!ub) return valKind(a.v)===valKind(b.v);   // 尿蛋白定性(2+)与定量(2.3) 类型不同，仍是两项
+  if(!ua||!ub) return valKind(a.v)===valKind(b.v);
   return false;
 };
+/* 同一项：名称归一后相同，且单位一致；一侧没读到单位时，只要结果类型一致也算同一项 */
+const sameItem=(a,b)=>normName(a.n)===normName(b.n)&&unitsOk(a,b);
+/* 按规范键认定同一项（名称写法不同、但归属到同一指标） */
+const sameCanonItem=(a,b)=>canonOf(a)===canonOf(b)&&unitsOk(a,b);
 /* 数值+单位+参考区间的签名，用于重复导入比对（单位按归一后的写法比较） */
 const itemSig=x=>[x.v,normUnit(x.u),x.lo==null?'':x.lo,x.hi==null?'':x.hi].join('|');
 
@@ -2245,11 +2328,12 @@ function impDup(){
   for(const g of groupImp()){
     if(!g.date) continue;
     const all=rptItems(g.date);
-    // 先按「名称+单位」严格匹配；一个都对不上时，再按名称粗匹配判断是不是同一份报告
-    let old=all.filter(o=>g.items.some(it=>sameItem(it,o)));
+    // 先按「名称+单位」严格匹配；学到的别名按规范键也算同一项。
+    // 一个都对不上时，再按规范键粗匹配判断是不是同一份报告
+    let old=all.filter(o=>g.items.some(it=>sameItem(it,o)||sameCanonItem(it,o)));
     let fuzzy=false, matched=old.length;
     if(all.length&&!old.length){
-      const near=all.filter(o=>g.items.some(it=>normName(it.n)===normName(o.n)));
+      const near=all.filter(o=>g.items.some(it=>canonOf(it)===canonOf(o)));
       // 同日另一份报告（如生化 vs 血常规）通常一个名字都对不上，只有 ≥3 项同名才当作「同一份但写法不同」
       if(near.length<3) continue;
       old=near; fuzzy=true; matched=near.length;
@@ -2269,18 +2353,18 @@ function impDup(){
     if(fuzzy){
       // 粗匹配时不看单位也不看「这次没读到」：写法差异会让所有项都像新增/缺失
       for(const it of g.items){
-        const o=old.find(x=>normName(x.n)===normName(it.n));
+        const o=old.find(x=>canonOf(x)===canonOf(it));
         if(!o) add.push({n:it.n, now:it.v});
         else if(String(o.v)!==String(it.v)) chg.push({n:it.n, now:it.v, old:o.v});
       }
     }else{
       for(const it of g.items){
-        const o=old.find(x=>sameItem(x,it));
+        const o=old.find(x=>sameItem(x,it)||sameCanonItem(x,it));
         if(!o) add.push({n:it.n, now:it.v});
         // 数值、单位、参考区间任一变化都算「不同」：单位从 μmol/L 变 mg/dL 时数值相同也不能当重复
         else if(itemSig(o)!==itemSig(it)) chg.push({n:it.n, now:it.v, old:o.v});
       }
-      for(const o of old) if(!g.items.some(x=>sameItem(x,o))) del.push({n:o.n, old:o.v});
+      for(const o of old) if(!g.items.some(x=>sameItem(x,o)||sameCanonItem(x,o))) del.push({n:o.n, old:o.v});
     }
     out.push({date:g.date, oldN:all.length, matched, newN:g.items.length, chg, add, del, fuzzy});
   }
@@ -2316,12 +2400,18 @@ function restat(it){
 function impRow(di,ii,it){
   const cls=it.st==='high'?' hi':(it.st==='low'?' lo':'');
   const ref=(it.lo!=null&&it.hi!=null)?`<i>${it.lo}-${it.hi}</i>`:'';
+  const ck=META[canonOf(it)]?canonOf(it):'';
   return `<div class="ci-row${cls}${it._warn?' warn':''}" data-row="${di}_${ii}">
     <span class="ci-n" title="${esc(it.n)} ${it.lo!=null?it.lo+'-'+it.hi:''}">${esc(it.n)}${ref}</span>
     <input class="ci-in" data-k="${di}_${ii}" value="${esc(it.v)}" inputmode="decimal"
       onchange="impCommit(${di},${ii},this)"
       onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">
     <span class="ci-u">${esc(it.u||'')}</span>
+    <select class="ci-c${ck?' set':''}" onchange="impAssign(${di},${ii},this.value)"
+      title="这项算档案里的哪个指标（写法不同也能归到一起）">
+      <option value="">未归类</option>
+      ${ORDER.map(k=>`<option value="${k}"${ck===k?' selected':''}>${SHORT[k]||META[k].n}</option>`).join('')}
+    </select>
     <button class="ci-ok${it._ok?' on':''}" data-ok="${di}_${ii}" onclick="impMark(${di},${ii})"
       title="${it._ok?'已核对，点击取消':'标记为与原件一致'}">${it._ok?'✓':'○'}</button>
   </div>`;
@@ -2356,10 +2446,25 @@ function impCommit(di,ii,el){
   }
   it._ok=true;                     // 改过即视为已核对
   // 手改后也做一次合理性检查：5.2 误输成 52 这类要能看出来
-  const k=keyOfName(it.n);
+  const k=canonOf(it);
   it._warn=!!(k&&META[k]&&typeof it.v==='number'&&impSuspect({key:k,v:it.v}));
   el.value=it.v;
   impPaint(di,ii,it); impCheckProgress();
+}
+
+/* 核对时指定归属指标：写回该行，并把这个写法记成别名（下次自动认）
+   key 为空表示「未归类」，会撤销之前学到的别名 */
+function impAssign(di,ii,key){
+  const g=groupImp()[di];
+  if(!g||!g.items[ii]) return;
+  const it=g.items[ii];
+  const want=key&&META[key]?key:null;
+  const y=window.scrollY;
+  if(want) it.cn=want; else delete it.cn;
+  learnAlias(it.n,want);
+  renderImpResult();
+  window.scrollTo(0,y);
+  toast(want?`「${it.n}」已归到 ${META[want].n}，以后自动记住`:`「${it.n}」已取消归属`);
 }
 
 function impMark(di,ii){
@@ -2397,6 +2502,23 @@ function impStat(){
   const total=groups.reduce((s,g)=>s+g.items.length,0);
   const done=groups.reduce((s,g)=>s+g.items.filter(i=>i._ok).length,0);
   return {total,done};
+}
+
+/* 本次核对后真正会进趋势图的项：以核对表里的归属（含手改）为准，
+   再加上别名匹配到、但逐项解析没整理出来的指标 */
+function impTracked(groups,parsed){
+  const m=new Map();
+  (groups||groupImp()).forEach(g=>{
+    if(!g.date) return;
+    g.items.forEach(it=>{
+      const k=canonOf(it);
+      if(k&&META[k]) m.set(g.date+'|'+k,{date:g.date,key:k,v:it.v});
+    });
+  });
+  (parsed||window._fresh||[]).forEach(p=>{
+    if(p&&p.date&&!m.has(p.date+'|'+p.key)) m.set(p.date+'|'+p.key,p);
+  });
+  return [...m.values()];
 }
 
 function impCheckProgress(){
@@ -2502,7 +2624,8 @@ function renderImpResult(){
     </div>
     <div style="margin-top:5px;font-size:11.5px;color:#5b6b7a;line-height:1.65">
       照原件核对，<b>数值可直接点开改</b>，无误点右侧 ○；全部核对完才写入${
-        allAbn?`（<span style="color:#d93a3a">${allAbn} 项超出参考范围</span>）`:''}。
+        allAbn?`（<span style="color:#d93a3a">${allAbn} 项超出参考范围</span>）`:''}。<br>
+      医院写的名字和档案不一样？把每行右侧的「未归类」改成对应指标即可，以后这种写法会自动认出来。
     </div>
   </div>`;
 
@@ -2539,12 +2662,13 @@ function renderImpResult(){
       已按参考区间修正（预览里显示的就是修正后的值），如与原件不符请直接改。</div>`;
   }
 
-  if(fresh.length){
+  const tracked=impTracked(groups,fresh);
+  if(tracked.length){
     html+=`<div class="imp-ok" style="background:#f4faf7;margin-top:10px">
-      <b>📈 其中 ${fresh.length} 项属于日常追踪指标，会同步到趋势图</b>
+      <b>📈 其中 ${tracked.length} 项属于日常追踪指标，会同步到趋势图</b>
       <div style="margin-top:6px;font-size:12px;line-height:1.85">
-      ${Object.keys(fresh.reduce((m,p)=>{(m[p.date]=m[p.date]||[]).push(p);return m;},{})).sort().map(d=>
-        `<div><b>${d}</b>：${fresh.filter(p=>p.date===d).map(p=>{
+      ${Object.keys(tracked.reduce((m,p)=>{(m[p.date]=m[p.date]||[]).push(p);return m;},{})).sort().map(d=>
+        `<div><b>${d}</b>：${tracked.filter(p=>p.date===d).map(p=>{
           const bad=impSuspect(p);
           return `${META[p.key].n} <b style="color:${bad?'#d93a3a':'#1a9e63'}">${p.v}</b>`+(bad?' <span style="color:#d93a3a;font-size:11px">⚠ 数值可疑</span>':'');
         }).join('、')}</div>`).join('')}
@@ -2574,20 +2698,9 @@ function confirmImport(){
   const {total,done}=impStat();
   if(done<total){ toast(`还有 ${total-done} 项没核对`); return; }
 
-  // 趋势指标以「核对表里的值」为准：用户改过数值后，不能再写回 OCR 原始值
-  const picked=new Map();
-  for(const g of groups){
-    if(!g.date) continue;
-    for(const it of g.items){
-      const k=keyOfName(it.n);
-      if(k&&META[k]) picked.set(g.date+'|'+k,{date:g.date,key:k,v:it.v});
-    }
-  }
-  const fresh=[...picked.values()];
-  // 别名匹配到、但逐项解析没整理出来的指标，仍然保留原值
-  for(const p of (window._fresh||[])){
-    if(p.date&&!picked.has(p.date+'|'+p.key)) fresh.push(p);
-  }
+  // 趋势指标以「核对表里的值」和「核对时指定的归属」为准：
+  // 医院写法不同、但归到同一指标的，只写一条，不会在趋势里变成两条
+  const fresh=impTracked(groups,window._fresh||[]);
 
   fresh.forEach(p=>{
     DB.labs[p.date]=DB.labs[p.date]||{};
@@ -2606,9 +2719,13 @@ function confirmImport(){
     for(const it of g.items){
       const save={n:it.n,v:it.v,u:it.u,lo:it.lo,hi:it.hi,st:it.st};
       if(it.raw!=null) save.raw=it.raw;      // 自动修正过的留痕
-      const old=cur.items.find(x=>sameItem(x,it));
+      if(it.cn&&META[it.cn]) save.cn=it.cn;  // 人工/别名认定的归属
+      // 名称写法不同、但归属到同一指标时，更新已有那项，不另起一行
+      const old=cur.items.find(x=>sameItem(x,it)||sameCanonItem(x,it));
       if(old){
-        if(itemSig(old)!==itemSig(it)){ Object.assign(old,save); updN++; }
+        const sigDiff=itemSig(old)!==itemSig(it);
+        const cnDiff=(old.cn||'')!==(save.cn||'');
+        if(sigDiff||cnDiff){ Object.assign(old,save); updN++; }
       }else{
         cur.items.push(save); newN++;
       }
