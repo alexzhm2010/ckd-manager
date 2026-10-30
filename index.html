@@ -1194,11 +1194,11 @@ const SHORT={
 
 /* 排除词：防止别名误匹配到其他指标行（如"肌酐"误命中"白蛋白/肌酐"） */
 const EXCL={
-  crea:['白蛋白','ACR','尿','胱抑素'],
+  crea:['白蛋白','ACR','尿','胱抑素','eGFR','滤过','估算'],
   alb:['微量','/肌','ACR','总蛋白','球蛋白','前白蛋白'],
   hgb:['平均','压积','体积','浓度','含量','MCH','糖化','A1c'],
   ca:['离子','磷'],
-  p:['PTH','甲旁'],
+  p:['PTH','甲旁','磷酸酶','磷脂'],
   k:['钠','氯','钙'],
   ua:['ACR','比'],
   tc:['甘油','LDL','HDL','低密度','高密度'],
@@ -1684,8 +1684,18 @@ function ocrRebuildRows(data){
     row.ws.push(w);
     row.y=(row.y*(row.ws.length-1)+yc)/row.ws.length;
   }
-  return rows.map(r=>r.ws.sort((a,b)=>a.bbox.x0-b.bbox.x0)
-      .map(w=>w.text).join(' ').replace(/\s+/g,' ').trim())
+  return rows.map(r=>{
+      const ws=r.ws.sort((a,b)=>a.bbox.x0-b.bbox.x0);
+      let s='';
+      for(let i=0;i<ws.length;i++){
+        if(i){
+          const gap=ws[i].bbox.x0-ws[i-1].bbox.x1;
+          s += (gap>Math.max(12,med*1.2))?'\t':' ';
+        }
+        s += ws[i].text;
+      }
+      return s.replace(/[ \t]+$/,'').trim();
+    })
     .filter(Boolean).join('\n');
 }
 
@@ -1772,6 +1782,7 @@ function numTokens(s){
 
 function cleanItemName(s){
   let n=String(s||'')
+    .replace(/[↑↓]/g,'')
     .replace(/[“”‘’"'《》〈〉，。、·*#※△▲◆◇○●★☆]/g,'')
     .replace(/^[^A-Za-z\u4e00-\u9fa5α-ωΑ-Ω]+/,'')            // 去掉名字前的「% 18 」这类残留
     .replace(/[\s:：,，.。;；_\-—]+$/,'')
@@ -1783,6 +1794,10 @@ function cleanItemName(s){
   if(ci>0&&ci<=8&&/^[A-Za-z]{1,2}\s+\d{1,2}\s*$/.test(n.slice(0,ci))) n=n.slice(ci).trim();
   // 去掉左侧「代号」列：CO2-L / Cys C / eGFRcr 这类拉丁代号（数字开头的如 24h尿蛋白不动）
   n=n.replace(/^[A-Za-z][A-Za-z0-9 .\-]{0,14}(?=[*△▲☆★]?[\u4e00-\u9fa5])/,'').replace(/^[*△▲☆★]+/,'').trim();
+  // OCR 常把「△*」读成「人 / 上 / 和 / A / Ax」：反复剥掉这类前缀（只在后面紧跟中文时剥，避免误伤 eGFR 这类英文名）
+  for(let k=0;k<3;k++) n=n.replace(/^(?:[人上和]\s*)?(?:[A-Za-z]{1,2}\s*)?(?=[\u4e00-\u9fa5])/,'').trim();
+  // 单字项目名只允许真实存在的指标（钾/钠/氯/钙/磷/镁…），其余单字是噪声
+  if(n.length===1&&!/^[钾钠氯钙磷镁铁锌铜锂氟]$/.test(n)) return '';
   // OCR 常把上一行的尾巴并进来，名字里出现小数就一定是串行噪声
   if(/\d+\.\d+/.test(n)) return '';
   // 括号不配平（"氯C1)"）时去掉多出来的右括号
@@ -1795,7 +1810,7 @@ function cleanItemName(s){
       // 少数项目只用英文代号（eGFR / CREA / UA…），这类名也收
       if(!/^(egfr|gfr|crea|cysc|urea|ua|pth|hgb|alb|tc|tg|ldl|chol)$/i.test(n.replace(/\s+/g,''))) return '';
     }
-  if(/项目|参考|结果|单位|检验|样本|姓名|报告|申请|检测|采集|接收|审核|实验室|声明|电话|地址|第.*页/.test(n)) return '';
+  if(/项目|参考|结果|单位|检验|样本|标本|姓名|报告|申请|检测|采集|接收|审核|实验室|声明|电话|地址|备注|页|条码|诊断|年龄|性别|时间|科室|医生|比值|第.*页/.test(n)) return '';
   return n;
 }
 
@@ -1931,6 +1946,51 @@ function splitSegs(line){
 }
 
 /* 整份报告 → {date, items, max, missing} */
+/* 按「列」解析一行：OCR 重排后列之间用 \t 分隔，适合代号/名称/结果/单位/参考范围的表格 */
+function parseRowCells(line){
+  const cells=line.split(/\t+/).map(s=>s.trim()).filter(Boolean);
+  if(cells.length<3) return [];
+  const out=[];
+  for(let i=0;i<cells.length;i++){
+    RANGE_RE.lastIndex=0;
+    if(!RANGE_RE.test(cells[i])) continue;
+    // 结果列：区间左侧最近的纯数字单元格
+    let vi=-1;
+    for(let j=i-1;j>=0;j--){
+      const c=cells[j];
+      if(!/\d/.test(c)||/[\u4e00-\u9fa5]/.test(c)) continue;
+      RANGE_RE.lastIndex=0; if(RANGE_RE.test(c)) continue;
+      vi=j; break;
+    }
+    if(vi<0) continue;
+    const tk=numTokens(cells[vi])[0];
+    if(!tk) continue;
+    const arrow=(/[↑↓]/.exec(cells[vi])||[])[0]||'';
+    // 名称列：结果左侧最近的「含中文或已知英文代号」单元格
+    let ni=-1;
+    for(let j=vi-1;j>=0;j--){
+      const c=cells[j];
+      RANGE_RE.lastIndex=0;
+      if(!c||RANGE_RE.test(c)) continue;
+      if(!/[\u4e00-\u9fa5]/.test(c)&&!/^(egfr|crea|ua|urea|cysc|pth|hgb|alb|tc|tg|ldl)$/i.test(c.replace(/\s+/g,''))) continue;
+      ni=j; break;
+    }
+    if(ni<0) continue;
+    // 单位：优先取结果单元格里数字后面的字母（如 "23.04 ml/min"），否则看结果与区间之间的列
+    let unitCell='';
+    const rest=cells[vi].slice(tk.end).trim();
+    const rm=rest.match(/[A-Za-zμµ%][A-Za-z0-9μµ%\/\^\.]*/);
+    if(rm) unitCell=rm[0];
+    else{
+      for(let j=vi+1;j<i;j++){ if(/[A-Za-zμµ%]/.test(cells[j])){ unitCell=cells[j]; break; } }
+    }
+    const body=cells[ni]+' '+arrow+tk.v+' '+unitCell+' '+cells[i];
+    const it=parseItemLine(body);
+    if(it&&it.st!=='unk') out.push(it);
+  }
+  return out;
+}
+
 function parseItems(text){
   const t=parseNorm(text||'');
   const date=findDate(t)||'';
@@ -1942,6 +2002,15 @@ function parseItems(text){
   for(const raw of lines){
     const line=raw.trim();
     if(line.length<4) continue;
+    // 有列分隔（OCR 重排结果）：按单元格解析，避免名称与代号/单位粘连
+    if(/\t/.test(line)){
+      for(const it of parseRowCells(line)){
+        const sig='c|'+it.n+'|'+(it.u||'');
+        if(names.has(sig)) continue;
+        names.add(sig); items.push(it);
+      }
+      continue;
+    }
     for(const seg of splitSegs(line)){
       if(/^\d{1,2}:\d{2}/.test(seg)) continue;               // 04:30 这种是截图里的时间，不是序号
       const m=seg.match(NO_RE);
@@ -1966,6 +2035,7 @@ function parseItems(text){
     const line=raw.trim();
     if(line.length<6) continue;
     if(/^\d{1,2}(?=[\s.、．,，:：]|[\u4e00-\u9fa5])/.test(line)) continue;
+    if(/\t/.test(line)) continue;
     if(!/[\u4e00-\u9fa5]/.test(line)) continue;
     const it=parseItemLine(line);
     if(!it||it.st==='unk') continue;                          // 没区间就分不清名字和数值，宁可不收
@@ -2119,10 +2189,14 @@ function keyOfName(n){
   for(const k of keys){
     if((ALIAS[k]||[]).some(a=>a.toLowerCase()===nm)) return k;
   }
+  // 包含匹配时取「最长别名」：避免「估算肾小球滤过率（肌酐）」被判成肌酐
+  let best=null,bestLen=0;
   for(const k of keys){
-    if((ALIAS[k]||[]).some(a=>a.length>=2&&nm.includes(a.toLowerCase()))) return k;
+    for(const a of (ALIAS[k]||[])){
+      if(a.length>=2&&nm.includes(a.toLowerCase())&&a.length>bestLen){ best=k; bestLen=a.length; }
+    }
   }
-  return null;
+  return best;
 }
 /* 名称/单位归一：同一项在 PDF 文字层和 OCR 里常只差空格、星号、上标写法
    （如「白细胞计数*」vs「白细胞计数」、「10^9/L」vs「10⁹/L」） */
@@ -2852,7 +2926,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.1.0 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.1.1 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
