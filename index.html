@@ -456,6 +456,19 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
 </nav>
 <div class="toast" id="toast"></div>
 
+<!-- 云端空档时的一次性历史导入面板 -->
+<div id="seedModal" class="login" style="display:none">
+  <div class="login-card">
+    <div class="login-logo">📊</div>
+    <h2>导入本机历史数据</h2>
+    <div class="hint">云端账号里还没有指标数据。本机带有加密的历史基线，输入原来的访问密码即可一次性导入并同步，只需一次。</div>
+    <input type="password" id="seedPwd" placeholder="原访问密码" autocomplete="current-password">
+    <button class="btn" onclick="doSeedHistory()">导入并同步</button>
+    <div class="login-err" id="seedErr"></div>
+    <div class="login-secure"><a href="#" onclick="closeSeedHistory();return false">稍后再说</a></div>
+  </div>
+</div>
+
 <script>
 /* ==================== 数据 ==================== */
 </script>
@@ -898,40 +911,46 @@ async function cloudSyncNow(){
   }
 }
 
-/* 云端登录后，需要把本机那份加密历史灌进 facts 一次 */
-async function seedHistoryPrompt(){
-  const pwd=prompt('输入本机历史数据的访问密码（一次性解密并上传到云端）');
-  if(!pwd) return;
+/* 云端登录后，需要把本机那份加密历史灌进 facts 一次。
+   历史基线随仓库分发，任何设备都有；但只有原访问密码能解开，所以必须问一次。 */
+function seedHistoryPrompt(){ showSeedHistory(); }
+
+function showSeedHistory(){
+  const m=document.getElementById('seedModal');
+  if(!m) return;
+  document.getElementById('seedErr').textContent='';
+  document.getElementById('seedPwd').value='';
+  m.style.display='flex';
+  setTimeout(()=>{ const i=document.getElementById('seedPwd'); if(i) i.focus(); },60);
+}
+function closeSeedHistory(){
+  document.getElementById('seedModal').style.display='none';
+  try{ sessionStorage.setItem('seed_history_asked','1'); }catch(e){}
+}
+async function doSeedHistory(){
+  const err=document.getElementById('seedErr');
+  const pwd=document.getElementById('seedPwd').value;
+  if(!pwd){ err.textContent='请输入原来的访问密码'; return; }
+  err.textContent='解密中…';
   const H=await tryDecryptHistory(pwd);
-  if(!H){ toast('密码不正确，无法解密本机历史'); return; }
+  if(!H){ err.textContent='密码不正确，请重试'; return; }
   window.HISTORY=H;
   const seed=historyFacts(H).filter(r=>!FACTMAP.has(r.uid));
-  if(!seed.length){ toast('本机历史已全部在云端，无需重复导入'); return; }
+  if(!seed.length){ err.textContent='历史数据已全部在云端'; setTimeout(closeSeedHistory,800); return; }
   applyFacts(mergeFacts(FACTS,seed));
-  renderLogs(); renderRpt(); renderHome(); renderVisit(); drawChart();
+  closeSeedHistory();
+  renderLogs(); renderRpt(); renderHome(); renderVisit(); drawChart(); renderCloud();
   queueCloudSync(seed,[]);
-  toast(`已导入 ${seed.length} 条历史数据，正在上传…`);
+  toast(`已导入 ${seed.length} 条历史指标，正在同步…`);
 }
 
-/* 云端账号还空着、而本机带着加密历史基线时，登录后主动问一次访问密码。
-   历史基线随仓库分发，任何设备都有；只有访问密码能解开，所以必须问用户。 */
+/* 云端账号还空着、而本机带着加密历史基线时，登录后主动弹出一次导入面板 */
 async function maybeSeedHistory(){
   if(!CLOUD_ON||!cloudUser) return;
   if(FACTS.some(r=>r&&r.kind==='lab')) return;
   if(typeof ENCRYPTED_DATA==='undefined') return;
-  if(sessionStorage.getItem('seed_history_asked')) return;
-  sessionStorage.setItem('seed_history_asked','1');
-  const pwd=prompt('云端账号里还没有指标数据。\n本机带有加密的历史基线，输入原来的访问密码即可一次性导入并同步到云端（只需一次，之后不用再输）：');
-  if(!pwd) return;
-  const H=await tryDecryptHistory(pwd);
-  if(!H){ toast('密码不正确，可稍后在「数据存储」里重新导入'); return; }
-  window.HISTORY=H;
-  const seed=historyFacts(H).filter(r=>!FACTMAP.has(r.uid));
-  if(!seed.length){ toast('历史数据已全部在云端，无需重复导入'); return; }
-  applyFacts(mergeFacts(FACTS,seed));
-  renderLogs(); renderRpt(); renderHome(); renderVisit(); drawChart(); renderCloud();
-  queueCloudSync(seed,[]);
-  toast(`已导入 ${seed.length} 条历史指标，正在同步…`);
+  try{ if(sessionStorage.getItem('seed_history_asked')) return; }catch(e){}
+  showSeedHistory();
 }
 
 /* ==================== 云端状态卡片 ==================== */
