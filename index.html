@@ -244,6 +244,7 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
     <span class="chip" id="hdEgfr">eGFR —</span>
     <span class="chip" id="hdDate">最近检查 —</span>
     <span class="chip">第 4 期</span>
+    <span class="chip" id="appVer">v—</span>
   </div>
 </header>
 <div class="app">
@@ -1363,6 +1364,8 @@ async function parseReports(){
       }
       // 保留列间距：后续靠「列首」定位结果值，空格被压缩就定位不到
       try{ await worker.setParameters({preserve_interword_spaces:'1'}); }catch(e){}
+      // 化验单是规整的表格块，按「单一文本块」切行比自动排版更稳
+      try{ await worker.setParameters({tessedit_pageseg_mode:'6'}); }catch(e){}
       // 引擎就绪前用户又选了文件：放弃本次，别让两份 OCR 同时跑
       if(run!==impRunId){ try{ await worker.terminate(); }catch(e){} return; }
       impWorker=worker;
@@ -1385,12 +1388,16 @@ async function parseReports(){
         if(pg.text){ fullText += '\n' + pg.text; continue; }
         // 双栏页会拆成左右两张图，各自识别（左右栏互不串行）
         for(const im of (pg.imgs||[])){
-          const r=await worker.recognize(im);
+          let r;
+          try{ r=await worker.recognize(im,{}, {text:true,blocks:true}); }   // 要字坐标，才能按行重排
+          catch(e){ r=await worker.recognize(im); }
           if(run!==impRunId){ try{ await worker.terminate(); }catch(e){} impWorker=null; return; }
           if(r&&r.data){
             // 整页置信度太低时提示人工重点核对（不直接丢行，避免误删真值）
             if(typeof r.data.confidence==='number'&&r.data.confidence<65) impLowConf++;
-            fullText += '\n' + (r.data.text||'');
+            // 表格类截图常被 OCR 按“列”拆成多行，这里按字的 y 坐标重新拼回整行
+            const rebuilt=ocrRebuildRows(r.data);
+            fullText += '\n' + (rebuilt||r.data.text||'');
           }
         }
       }
@@ -1649,6 +1656,54 @@ function pickValue(line, from){
   const tail=seg.slice(pick.end, pick.end+22);
   if(/^\s*\d+(?:\.\d+)?\s*[-~～]\s*\d/.test(tail)) score+=4;   // 后面紧跟参考区间
   return {v:pick.v, score};
+}
+
+/* OCR 结果按「字坐标」重排成整行：表格截图常被识别成“先整列名称、再整列数值”，
+   按原始文本顺序解析永远凑不齐一行，这里按 y 坐标重新拼。 */
+function ocrRebuildRows(data){
+  const ws=[];
+  (function walk(n){
+    if(!n) return;
+    if(Array.isArray(n)){ n.forEach(walk); return; }
+    if(Array.isArray(n.words)){
+      n.words.forEach(w=>{ if(w&&w.text&&w.text.trim()&&w.bbox) ws.push(w); });
+      return;
+    }
+    for(const k of ['blocks','paragraphs','lines']) if(n[k]) walk(n[k]);
+  })(data.blocks||data.words);
+  if(ws.length<8) return '';
+  const hs=ws.map(w=>w.bbox.y1-w.bbox.y0).sort((a,b)=>a-b);
+  const med=hs[Math.floor(hs.length/2)]||12;
+  const tol=Math.max(6,med*0.62);
+  const list=ws.slice().sort((a,b)=>(a.bbox.y0+a.bbox.y1)-(b.bbox.y0+b.bbox.y1));
+  const rows=[];
+  for(const w of list){
+    const yc=(w.bbox.y0+w.bbox.y1)/2;
+    let row=rows[rows.length-1];
+    if(!row||yc-row.y>tol){ row={y:yc,ws:[]}; rows.push(row); }
+    row.ws.push(w);
+    row.y=(row.y*(row.ws.length-1)+yc)/row.ws.length;
+  }
+  return rows.map(r=>r.ws.sort((a,b)=>a.bbox.x0-b.bbox.x0)
+      .map(w=>w.text).join(' ').replace(/\s+/g,' ').trim())
+    .filter(Boolean).join('\n');
+}
+
+/* 复制识别到的文字，便于把真实 OCR 结果反馈出来排查 */
+function copyImpText(){
+  const t=(impTextAll||'').trim();
+  if(!t){ toast('没有可复制的文字'); return; }
+  const done=()=>toast('识别文字已复制');
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(done).catch(()=>fallbackCopy(t,done));
+  }else fallbackCopy(t,done);
+}
+function fallbackCopy(t,done){
+  const ta=document.createElement('textarea');
+  ta.value=t; ta.style.position='fixed'; ta.style.opacity='0';
+  document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); done(); }catch(e){ toast('复制失败，请长按文字手动复制'); }
+  document.body.removeChild(ta);
 }
 
 /* 从 OCR 文本提取日期与指标值 */
@@ -2413,6 +2468,7 @@ function renderImpResult(){
         <div style="margin-top:6px;font-size:11.5px;line-height:1.7;white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto;background:#fbfcfd;border:1px solid #e6ebf0;border-radius:8px;padding:8px">${esc(raw)}</div>
         <div class="muted" style="margin-top:6px;font-size:11px">文字本身是乱码时，换 PDF 原件最有效</div>
       </details>`:'')
+      +(raw?`<div style="margin-top:8px"><button class="btn ghost sm" onclick="copyImpText()">复制识别文字</button></div>`:'')
       +`<div class="muted" style="margin-top:8px;font-size:11.5px">也可以在下方「把报告文字粘贴进来解析」里手工粘贴文字后再解析一次。</div>`;
     setImpActions('');
     return;
@@ -2796,7 +2852,10 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
+const APP_VERSION='v1.1.0 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+(function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
+  const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
   document.getElementById('labDate').value=today();
   document.getElementById('labKey').innerHTML=ORDER.map(k=>`<option value="${k}">${META[k].n}</option>`).join('');
   await bootstrapData();
