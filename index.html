@@ -388,24 +388,6 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
   </div>
 </section>
 
-<!-- ============ 用药 ============ -->
-<section class="page" id="p-med">
-  <div class="card">
-    <h2><span class="t"><span class="bar"></span>当前方案</span></h2>
-    <div id="medFull"></div>
-  </div>
-  <div class="card">
-    <h2><span class="t"><span class="bar"></span>近7天服药依从性</span></h2>
-    <div class="chart" id="medChart" style="height:200px"></div>
-  </div>
-  <div class="card">
-    <h2><span class="t"><span class="bar"></span>用药安全红线</span></h2>
-    <div class="rem r"><span class="ic">🚫</span><div><b>绝对禁用</b>：布洛芬等非甾体止痛药、氨基糖苷类抗生素、含马兜铃酸中药、造影剂（需事先告知医生肾功能）</div></div>
-    <div class="rem a"><span class="ic">⚠️</span><div><b>叠加风险</b>：培哚普利 + 达格列净均升血钾，避免同时大量吃高钾食物</div></div>
-    <div class="rem a"><span class="ic">💧</span><div><b>腹泻/发热/呕吐</b>时需暂停达格列净与培哚普利并及时就医（防急性肾损伤）</div></div>
-  </div>
-</section>
-
 <!-- ============ 复查 ============ -->
 <section class="page" id="p-visit">
   <div class="card">
@@ -461,7 +443,6 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
   <div data-p="log" onclick="go('log',this)"><span class="i">✍️</span>记录</div>
   <div data-p="chart" onclick="go('chart',this)"><span class="i">📈</span>指标</div>
   <div data-p="maint" onclick="go('maint',this)"><span class="i">🧾</span>维护</div>
-  <div data-p="med" onclick="go('med',this)"><span class="i">💊</span>用药</div>
   <div data-p="visit" onclick="go('visit',this)"><span class="i">🏥</span>复查</div>
   <div data-p="know" onclick="go('know',this)"><span class="i">📚</span>知识</div>
 </nav>
@@ -3099,41 +3080,6 @@ function clearImp(){
   impProgressHide();
 }
 
-/* ==================== 用药页 ==================== */
-let medChart=null;
-function renderMed(){
-  document.getElementById('medFull').innerHTML=MEDS.map(m=>`
-    <div class="med"><div class="dot"></div>
-      <div class="info"><div class="nm">${m.n}</div><div class="ds">${m.d}</div></div>
-    </div>`).join('')+
-    `<div class="muted" style="margin-top:12px;font-size:12px;line-height:1.7">
-    培哚普利=ACEI降蛋白尿核心；达格列净=SGLT2i肾保护；非布司他=控尿酸；阿托伐他汀=调脂。<br>
-    四药联合已覆盖 CKD 治疗四大支柱，与指南高度一致。</div>`;
-
-  // 7天依从性
-  const days=[],data=[];
-  for(let i=6;i>=0;i--){
-    const d=new Date(); d.setDate(d.getDate()-i);
-    const s=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-    const rec=DB.meds[s]||{};
-    days.push((d.getMonth()+1)+'/'+d.getDate());
-    data.push(Object.keys(rec).filter(x=>rec[x]).length);
-  }
-  if(!window.echarts) return;                    // 图表库还在下载
-  // 复用同一个实例，否则每次切到用药页都会在同一个 DOM 上重复 init
-  medChart=medChart||echarts.init(document.getElementById('medChart'));
-  medChart.setOption({
-    grid:{left:34,right:16,top:16,bottom:26},
-    tooltip:{trigger:'axis'},
-    xAxis:{type:'category',data:days,axisLabel:{fontSize:10,color:'#8899a6'}},
-    yAxis:{type:'value',max:4,minInterval:1,axisLabel:{fontSize:10,color:'#8899a6'},splitLine:{lineStyle:{color:'#f0f4f7'}}},
-    series:[{type:'bar',data:data,barWidth:'45%',
-      itemStyle:{color:p=>p.value>=4?'#1a9e63':'#e8b24a',borderRadius:[5,5,0,0]},
-      label:{show:true,position:'top',fontSize:10,color:'#7b8794',formatter:'{c}'}}]
-  }, true);
-  medChart.resize();
-}
-
 /* ==================== 复查页 ==================== */
 function renderVisit(){
   const list=DB.visits.filter(v=>v.date>=today()).sort((a,b)=>a.date.localeCompare(b.date));
@@ -3366,7 +3312,6 @@ function go(p,el){
   if(ib) ib.style.display=(p==='chart'||!ib.classList.contains('fixed'))?'':'none';
   if(p==='chart'){ initTrendSel(); renderSeg(); drawChart(); setTimeout(()=>chart&&chart.resize(),50); }
   if(p==='maint') renderMaint();
-  if(p==='med') setTimeout(renderMed,30);
   if(p==='visit') renderVisit();
   if(p==='log') renderRpt();
 }
@@ -3442,7 +3387,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.5.3 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.6.0 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
@@ -3454,7 +3399,7 @@ async function initApp(){
   if(window.__echartsReady) await window.__echartsReady;
   renderHome();
 }
-window.addEventListener('resize',()=>{ chart&&chart.resize(); medChart&&medChart.resize(); });
+window.addEventListener('resize',()=>{ chart&&chart.resize(); });
 
 /* 页面打开先尝试恢复登录态，登录过一个设备就不用再输一次 */
 (function restoreCloudSession(){
