@@ -17,6 +17,6 @@
    - 填好后重新发布（push）本仓库，GitHub Pages 会自动更新。
    ============================================================ */
 window.CLOUD_CONFIG = {
-  url: '',      // 例如 'https://abcdefghijk.supabase.co'
-  anonKey: ''   // 例如 'eyJhbGciOi...'
+  url: 'https://puxmntkqoykgnxlgrydj.supabase.co',
+  anonKey: 'sb_publishable_vcVYEYYKXrYJhinZKK3XsQ_wdoHbeQU'
 };
