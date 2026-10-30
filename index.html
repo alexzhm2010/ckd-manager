@@ -266,8 +266,8 @@ border-radius:50%;animation:spin .85s linear infinite}
     <h2>肾病健康管理平台</h2>
     <div id="cloudLogin">
       <div class="hint">数据只存在云端，本机不保存。邮箱会记住，每次使用都需要输入密码</div>
-      <input type="email" id="cloudEmail" placeholder="邮箱（会记住）" autocomplete="username" inputmode="email" style="letter-spacing:0;font-size:15px">
-      <input type="password" id="cloudPwd" placeholder="密码" autocomplete="current-password">
+      <input type="email" id="cloudEmail" placeholder="邮箱（会记住）" autocomplete="off" inputmode="email" style="letter-spacing:0;font-size:15px">
+      <input type="password" id="cloudPwd" placeholder="密码" autocomplete="off">
       <button class="btn" onclick="doCloudLogin()">登录</button>
       <div class="login-err" id="cloudErr"></div>
       <div class="login-secure">还没有账号？<a href="#" onclick="doCloudSignUp();return false">用此邮箱注册</a></div>
@@ -3353,7 +3353,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.6.3 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.6.4 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
