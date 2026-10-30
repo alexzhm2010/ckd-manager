@@ -225,7 +225,7 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
     <div class="login-logo">🩺</div>
     <h2>肾病健康管理平台</h2>
     <div id="cloudLogin">
-      <div class="hint">用邮箱登录，数据在多台设备间同步</div>
+      <div class="hint">用邮箱登录；数据只存在云端，本机不保存任何数据</div>
       <input type="email" id="cloudEmail" placeholder="邮箱" autocomplete="username" inputmode="email" style="letter-spacing:0;font-size:15px">
       <input type="password" id="cloudPwd" placeholder="密码" autocomplete="current-password">
       <button class="btn" onclick="doCloudLogin()">登录</button>
@@ -241,8 +241,8 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
   <h1>🩺 我的肾病管理平台</h1>
   <div class="sub">我的 · 45岁 · 慢性肾脏病4期 · 高血压 · 痛风</div>
   <div class="chips">
-    <span class="chip" id="hdEgfr">eGFR 24.25</span>
-    <span class="chip" id="hdDate">最近检查 2026-10-29</span>
+    <span class="chip" id="hdEgfr">eGFR —</span>
+    <span class="chip" id="hdDate">最近检查 —</span>
     <span class="chip">第 4 期</span>
   </div>
 </header>
@@ -473,39 +473,13 @@ let FACTS_READY=false;      // 等下面的表结构和 META 都就绪后，save
 const DEFAULT={
   logs:[], meds:{}, visits:[], labs:{}, syms:{}, abn:{}, rpt:{}
 };
-function load(){
-  // DEFAULT 里的数组/对象必须深拷贝，否则 Object.assign 会把引用共享出去，
-  // 改动 DB.logs 会顺带改掉 DEFAULT，下次 load 时默认值已被污染
-  const blank=()=>JSON.parse(JSON.stringify(DEFAULT));
-  try{ const d=JSON.parse(localStorage.getItem(KEY)); return d?Object.assign(blank(),d):blank(); }
-  catch(e){ return blank(); }
-}
+/* 数据只存云端：启动时从 facts 表拉取，浏览器里不保留任何数据 */
+function load(){ return JSON.parse(JSON.stringify(DEFAULT)); }
 function save(){
-  localStorage.setItem(KEY, JSON.stringify(DB));
-  // DB 只是内存模型，真正的数据源是 facts 表（本地缓存 + 云端两端同一套行）
+  // DB 只是本次会话的内存视图，唯一数据源是云端 facts 表
   if(FACTS_READY) persistFacts();
 }
 let DB=load();
-
-/* 旧版只存「异常项」（DB.abn），新版存整份报告（DB.rpt）。这里把老数据搬过去。 */
-(function migrateAbn(){
-  DB.rpt=DB.rpt||{};
-  const old=DB.abn||{};
-  let n=0;
-  for(const d of Object.keys(old)){
-    const arr=Array.isArray(old[d])?old[d]:[];
-    if(!arr.length) continue;
-    const cur=DB.rpt[d]=DB.rpt[d]||{items:[]};
-    cur.items=cur.items||[];
-    for(const it of arr){
-      if(!it||!it.name) continue;
-      if(cur.items.some(x=>x.n===it.name)) continue;
-      cur.items.push({n:it.name,v:it.v,lo:it.lo,hi:it.hi,st:it.dir==='low'?'low':'high'});
-      n++;
-    }
-  }
-  if(n){ DB.abn={}; save(); }
-})();
 
 const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
 const daysBetween=(a,b)=>Math.round((new Date(b)-new Date(a))/86400000);
@@ -578,8 +552,7 @@ const KNOW=[
    - kind='lab'   一天一个追踪指标（趋势图只读这一类行）
    - kind='rpt'   报告里的一个检验项目（含正常项）
    - kind='block'  用药/复查/症状/日志整块数据
-   本地模式写在 localStorage 缓存里；配置了 Supabase 后同一批行同步到云端。 */
-const FACT_CACHE_KEY='kidney_facts_v2';
+   所有行都只存云端 Supabase，浏览器不做缓存。 */
 const CLOUD=(window.CLOUD_CONFIG||{});
 const CLOUD_ON=!!(CLOUD.url&&CLOUD.anonKey);
 
@@ -597,16 +570,6 @@ function flagOf(v,m){
   if(v>m.ref[1]) return 'high';
   if(v<m.ref[0]) return 'low';
   return null;
-}
-
-function readFactCache(){
-  try{
-    const arr=JSON.parse(localStorage.getItem(FACT_CACHE_KEY));
-    return Array.isArray(arr)?arr:[];
-  }catch(e){ return []; }
-}
-function writeFactCache(rows){
-  try{ localStorage.setItem(FACT_CACHE_KEY, JSON.stringify(rows)); }catch(e){}
 }
 
 /* 两条同 uid 的行取 updated_at 较晚的一条；时间相同则后来的覆盖先来的 */
@@ -723,7 +686,6 @@ function applyFacts(rows){
   });
   DB=db;
   rebuildIndex(rows);
-  writeFactCache(rows);
 }
 
 /* 刷新 LABIDX 与 window.HISTORY（旧代码里仍有少数地方读 HISTORY） */
@@ -756,17 +718,7 @@ function persistFacts(){
   prevMap.forEach((_,uid)=>{ if(!next.has(uid)) del.push(uid); });
   FACTS=rows; FACTMAP=next;
   rebuildIndex(rows);
-  writeFactCache(rows);
   if(up.length||del.length) queueCloudSync(up,del);
-}
-
-/* 启动时：本地缓存 + 本地 DB 合成一份 facts */
-function localHydrate(){
-  let rows=readFactCache();
-  FACTMAP=new Map(rows.map(r=>[r.uid,r]));
-  buildCanonMap(rows);          // 先认下本地缓存的别名，后面的推导才能用上
-  rows=mergeFacts(rows,deriveFacts(DB,false));
-  applyFacts(rows);
 }
 
 /* ==================== 云端同步 ==================== */
@@ -863,22 +815,17 @@ async function flushCloud(){
   }
 }
 
-/* 手动同步：先拉云端，按 updated_at 合并，再把本地较新的行推上去 */
+/* 手动同步：先把未上传的改动推上去，再以云端数据为准全量刷新 */
 async function cloudSyncNow(){
   if(!cloudUser){ showLogin(); return; }
   toast('正在同步…');
   try{
     await flushCloud();
-    const cloudRows=await cloudPullAll();
-    const cloudMap=new Map(cloudRows.map(r=>[r.uid,r]));
-    const rows=mergeFacts(cloudRows,FACTS);
-    const up=rows.filter(r=>{
-      const c=cloudMap.get(r.uid);
-      return !c||(r.updated_at||0)>(c.updated_at||0);
-    });
+    let rows=await cloudPullAll();
+    // 推送失败的改动仍在内存队列里，合并回来，避免被云端数据盖掉
+    if(pendingUp.size) rows=mergeFacts(rows,[...pendingUp.values()]);
+    if(pendingDel.size) rows=rows.filter(r=>!pendingDel.has(r.uid));
     applyFacts(rows);
-    queueCloudSync(up,[]);
-    await flushCloud();
     renderLogs(); renderRpt(); renderHome(); renderVisit(); renderCloud(); drawChart();
     toast('已同步');
   }catch(e){
@@ -2841,31 +2788,25 @@ function showLogin(){
   document.getElementById('login').style.display='flex';
 }
 async function cloudSignOut(){
-  if(!confirm('退出账号？本机缓存仍保留，重新登录后以云端数据为准。')) return;
+  if(!confirm('退出账号？数据只存在云端，退出后本机不再保留任何数据。')) return;
   try{ const sb=await getSupabase(); await sb.auth.signOut(); }catch(e){}
   cloudUser=null; cloudErrMsg=''; pendingUp.clear(); pendingDel.clear();
   location.reload();
 }
 document.getElementById('cloudPwd').addEventListener('keydown',e=>{ if(e.key==='Enter') doCloudLogin(); });
 
-/* 启动数据：本地缓存 → 若已登录云端则拉取合并 */
+/* 启动数据：只从云端 facts 表读取，本机不保留数据 */
 async function bootstrapData(){
-  localHydrate();
-  if(!CLOUD_ON||!cloudUser) return;
+  if(!CLOUD_ON||!cloudUser){ applyFacts([]); return; }
   try{
-    const cloudRows=await withTimeout(cloudPullAll(),12000);
-    const cloudMap=new Map(cloudRows.map(r=>[r.uid,r]));
-    const rows=mergeFacts(cloudRows,FACTS);
-    const up=rows.filter(r=>{
-      const c=cloudMap.get(r.uid);
-      return !c||(r.updated_at||0)>(c.updated_at||0);
-    });
+    const rows=await withTimeout(cloudPullAll(),15000);
     applyFacts(rows);
-    const del=[...cloudMap.keys()].filter(uid=>!FACTMAP.has(uid));
-    queueCloudSync(up,del);
+    cloudErrMsg=''; cloudLastSync=Date.now();
   }catch(e){
     cloudErrMsg=(e&&(e.message||e.error_description))||String(e);
-    console.warn('云端数据加载失败，先用本地缓存',e);
+    applyFacts([]);
+    console.warn('云端数据加载失败',e);
+    toast('云端数据加载失败：'+cloudErrMsg);
   }
 }
 
