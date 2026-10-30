@@ -106,6 +106,21 @@ padding:3px 11px;font-size:11.5px;cursor:pointer;font-family:inherit;transition:
 /* 多选时每个指标带自己的色点 */
 .seg button .sw{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;
 vertical-align:1px;border:1px solid rgba(0,0,0,.12)}
+/* 未选指标上的异常次数角标 */
+.seg .seg-badge{display:inline-block;margin-left:5px;padding:0 5px;border-radius:8px;
+font-size:10px;line-height:15px;background:#fdeaea;color:var(--red);vertical-align:1px}
+.seg .seg-badge.mild{background:#fdf3e3;color:var(--amber)}
+/* ＋/× 更多指标按钮 */
+.seg .seg-add{width:30px;height:30px;padding:0;border-style:dashed;border-radius:50%;
+display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;
+color:#7b8794;background:#fbfcfd}
+.seg .seg-add:hover{border-color:var(--pri2);color:var(--pri2)}
+/* 展开后的更多指标：按有无异常分组 */
+.seg-more{display:none;flex-direction:column;gap:6px;margin:-2px 0 10px}
+.seg-more.on{display:flex}
+.seg-more .grp{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.seg-more .grp .lb{font-size:11px;color:var(--muted);flex:0 0 auto;margin-right:2px}
+.seg-more .grp .lb b{color:var(--red);font-weight:700}
 /* 双轴提示条 */
 .axis-note{background:#f2f6f9;border-radius:10px;padding:7px 10px;font-size:11.5px;
 color:#51606f;margin-bottom:8px;line-height:1.55;display:none}
@@ -330,8 +345,9 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
   <div class="card">
     <h2><span class="t"><span class="bar"></span>指标趋势</span><span class="muted" id="selCount"></span></h2>
     <div class="seg" id="segBox"></div>
+    <div class="seg-more" id="segMore"></div>
     <div class="seg-ops">
-      <span class="muted" style="font-size:11.5px">点击标签可多选对比</span>
+      <span class="muted" style="font-size:11.5px">默认只显示持续异常（≥3 次不合格）的指标</span>
       <button class="mini" onclick="clearSel()">清空</button>
     </div>
     <div class="axis-note" id="axisNote"></div>
@@ -563,7 +579,8 @@ const CLOUD_ON=!!(CLOUD.url&&CLOUD.anonKey);
 
 let FACTS=[];                 // 当前生效的全部 facts 行
 let FACTMAP=new Map();        // uid -> row，便于按业务键比对
-let LABIDX=new Map();         // 指标 key -> [{date,v}]，seriesOf 直接用
+let LABIDX=new Map();         // 指标 key -> [{date,v}]，趋势图直接用
+let RPTIDX=new Map();         // 规范键 -> Map(date->v)：报告里存过的值也算趋势数据
 let supa=null, cloudUser=null, cloudErrMsg='';
 let cloudFlushing=false, cloudSyncTimer=null;
 let pendingUp=new Map(), pendingDel=new Set();
@@ -719,16 +736,25 @@ function applyFacts(rows){
 
 /* 刷新 LABIDX 与 window.HISTORY（旧代码里仍有少数地方读 HISTORY） */
 function rebuildIndex(rows){
-  const idx=new Map(), h={};
+  const idx=new Map(), h={}, ridx=new Map();
   rows.forEach(r=>{
-    if(!r||r.kind!=='lab'||!r.date||r.key==null) return;
-    let a=idx.get(r.key); if(!a){ a=[]; idx.set(r.key,a); }
-    a.push({date:r.date,v:r.value});
-    (h[r.key]=h[r.key]||[]).push({date:r.date,v:r.value});
+    if(!r||!r.date) return;
+    if(r.kind==='lab'&&r.key!=null){
+      let a=idx.get(r.key); if(!a){ a=[]; idx.set(r.key,a); }
+      a.push({date:r.date,v:r.value});
+      (h[r.key]=h[r.key]||[]).push({date:r.date,v:r.value});
+    }else if(r.kind==='rpt'&&r.canon){
+      // 报告里存过的项目值：同一天还没有 lab 时作为趋势点（别让历史异常项看不到）
+      const v=Number(r.value);
+      if(!isFinite(v)) return;
+      let a=ridx.get(r.canon); if(!a){ a=new Map(); ridx.set(r.canon,a); }
+      a.set(r.date,v);
+    }
   });
   idx.forEach(a=>a.sort((x,y)=>x.date.localeCompare(y.date)));
   Object.keys(h).forEach(k=>h[k].sort((x,y)=>x.date.localeCompare(y.date)));
   LABIDX=idx;
+  RPTIDX=ridx;
   window.HISTORY=h;
 }
 
@@ -998,36 +1024,107 @@ function renderLogs(){
 
 /* ==================== 图表（多指标对比） ==================== */
 let chart=null;
-let selKeys=['egfr'];           // 已选指标（按点击顺序，决定左右轴归属）
+let selKeys=[];                 // 当前选中的对比指标（最多 6 项，决定左右轴归属）
+let segMoreOpen=false;          // 「＋ 更多指标」是否展开
+let selInited=false;            // 首次进入指标页时按异常情况给默认选择
 const COLORS=['#1287b8','#e08b0a','#1a9e63','#a855c7','#d93a3a','#0f9ba8'];
 const colorOf=k=>COLORS[selKeys.indexOf(k)%COLORS.length];
 
-function renderSeg(){
-  document.getElementById('segBox').innerHTML=ORDER.map(k=>{
-    const on=selKeys.includes(k);
-    const c=on?colorOf(k):'#cfd8e0';
-    return `<button class="${on?'on':''}" onclick="toggleKey('${k}')">
-      <span class="sw" style="background:${c}"></span>${META[k].n.replace(/[（(].*?[)）]/,'')}</button>`;
-  }).join('');
-  document.getElementById('selCount').textContent = selKeys.length? `已选 ${selKeys.length} 项` : '';
+/* 每个指标出现过异常（不合格）的日期集合：
+   报告项按归属指标算，补录/趋势值按参考区间算；同一天多次只算一次 */
+function abnStats(){
+  const m=new Map();
+  const add=(k,d)=>{ if(!k) return; if(!m.has(k)) m.set(k,new Set()); m.get(k).add(d); };
+  Object.keys(DB.rpt||{}).forEach(d=>{
+    (rptItems(d)||[]).forEach(it=>{ if(isAbn(it)) add(canonOf(it),d); });
+  });
+  Object.keys(DB.labs||{}).forEach(d=>{
+    const rec=DB.labs[d]||{};
+    Object.keys(rec).forEach(k=>{
+      const mm=META[k]; if(!mm||!mm.ref||mm.ref.length<2) return;
+      const v=Number(rec[k]);
+      if(isFinite(v)&&flagOf(v,mm)) add(k,d);
+    });
+  });
+  return m;
 }
+const abnCountOf=(m,k)=>(m.get(k)||new Set()).size;
+
+/* 默认展示：不合格日期 ≥3 次的指标，按次数从多到少，最多 3 项。
+   只有 1~2 次不合格或全部合格的指标不默认展示，收在「＋ 更多指标」里 */
+const ABN_DEFAULT_MIN=3;
+function trendDefaultKeys(stats){
+  const st=stats||abnStats();
+  return ORDER.filter(k=>META[k]&&seriesOf(k).length)
+    .filter(k=>abnCountOf(st,k)>=ABN_DEFAULT_MIN)
+    .sort((a,b)=>abnCountOf(st,b)-abnCountOf(st,a)||ORDER.indexOf(a)-ORDER.indexOf(b))
+    .slice(0,3);
+}
+function initTrendSel(){
+  if(selInited) return;
+  selInited=true;
+  selKeys=trendDefaultKeys();
+}
+
+function segChip(k,stats){
+  const on=selKeys.includes(k);
+  const c=on?colorOf(k):'#cfd8e0';
+  const n=stats?abnCountOf(stats,k):0;
+  const badge=n?`<span class="seg-badge${n<ABN_DEFAULT_MIN?' mild':''}">${n}次</span>`:'';
+  return `<button class="${on?'on':''}" onclick="toggleKey('${k}')"
+    title="${esc(META[k].n)}${n?' · 不合格 '+n+' 次':''}">
+    <span class="sw" style="background:${c}"></span>${esc(META[k].n.replace(/[（(].*?[)）]/,''))}${badge}</button>`;
+}
+function renderSeg(){
+  const stats=abnStats();
+  const box=document.getElementById('segBox');
+  if(!box) return;
+  // 顶部只放已选指标，默认可视化压力小；其余指标收进「＋」
+  const picked=selKeys.filter(k=>META[k]).map(k=>segChip(k,stats)).join('');
+  box.innerHTML=picked+
+    `<button class="seg-add" onclick="toggleSegMore()" title="${segMoreOpen?'收起指标':'更多指标'}">${segMoreOpen?'×':'＋'}</button>`;
+  const more=document.getElementById('segMore');
+  if(more){
+    const has=k=>META[k]&&seriesOf(k).length;
+    const bad=ORDER.filter(k=>has(k)&&abnCountOf(stats,k)>0)
+      .sort((a,b)=>abnCountOf(stats,b)-abnCountOf(stats,a)||ORDER.indexOf(a)-ORDER.indexOf(b));
+    const good=ORDER.filter(k=>has(k)&&abnCountOf(stats,k)===0);
+    const grp=(lb,ks)=>`<div class="grp"><span class="lb">${lb}</span>${
+      ks.map(k=>segChip(k,stats)).join('')||'<span class="lb">无</span>'}</div>`;
+    more.innerHTML=grp(`有不合格记录 <b>${bad.length}</b> 项`,bad)
+      +grp(`其余指标 <b style="color:#7b8794">${good.length}</b> 项`,good);
+    more.classList.toggle('on',segMoreOpen);
+  }
+  const cnt=document.getElementById('selCount');
+  if(cnt) cnt.textContent=selKeys.length?`已选 ${selKeys.length} 项`:'未选指标';
+}
+function toggleSegMore(){ segMoreOpen=!segMoreOpen; renderSeg(); }
 function toggleKey(k){
   const i=selKeys.indexOf(k);
-  if(i>=0){ if(selKeys.length===1) return toast('至少保留一个指标'); selKeys.splice(i,1); }
+  if(i>=0){ selKeys.splice(i,1); }
   else{ if(selKeys.length>=6) return toast('最多同时对比 6 个指标'); selKeys.push(k); }
   renderSeg(); drawChart();
 }
-function clearSel(){ selKeys=['egfr']; renderSeg(); drawChart(); toast('已重置为 eGFR'); }
+function clearSel(){ selKeys=[]; renderSeg(); drawChart(); toast('已清空，用 ＋ 选择指标'); }
 
-/* 取某指标全部数据。历史基线与后续导入、补录都已经是 facts 里的同类行，
-   这里只读这一张表（LABIDX 在 applyFacts / persistFacts 时重建） */
+/* 取某指标全部数据：趋势/补录的值 + 报告里存过的值（同一天 lab 优先） */
 function seriesOf(k){
-  return (LABIDX.get(k)||[]).map(x=>({date:x.date,v:x.v}));
+  const m=new Map();
+  (LABIDX.get(k)||[]).forEach(x=>m.set(x.date,x.v));
+  const rp=RPTIDX.get(k);
+  if(rp) rp.forEach((v,d)=>{ if(!m.has(d)) m.set(d,v); });
+  return [...m.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([date,v])=>({date,v}));
 }
 
 function drawChart(){
   const keys=selKeys.filter(k=>META[k]);
-  if(!keys.length) return;
+  if(!keys.length){
+    if(chart){ chart.clear(); }
+    const an=document.getElementById('axisNote'); if(an) an.classList.remove('on');
+    const tip=document.getElementById('chartTip');
+    if(tip) tip.innerHTML='暂无持续异常（≥3 次不合格）的指标。点上方 <b>＋</b> 选择要看的指标。';
+    return;
+  }
   // 统一时间轴：所有选中指标出现过的日期并集
   const dateSet=new Set();
   keys.forEach(k=>seriesOf(k).forEach(x=>dateSet.add(x.date)));
@@ -2698,6 +2795,33 @@ function autoTrack(it){
   it.cn=k; it._auto=true;
 }
 
+/* 历史数据补登记：只要某个项目曾出现过一次异常，就把它纳入日常跟踪。
+   内置指标本来就在 ORDER 里；这里补的是历史上还没归类、也没建指标的异常项。
+   用户明确设为「未归类」（负别名）的不补，尊重人工选择 */
+function ensureAbnormalTracked(){
+  let changed=false;
+  const made={};
+  const visit=it=>{
+    if(!isAbn(it)) return;
+    const k=canonOf(it);
+    if(k&&META[k]) return;          // 已有归属指标
+    if(isNegAlias(it.n)) return;    // 明确未归类
+    const ck=customKey(it.n);
+    if(!META[ck]){
+      const m={n:it.n,u:it.u||'',
+        ref:(it.lo!=null&&it.hi!=null)?[it.lo,it.hi]:null,dir:'range'};
+      registerMetric(ck,m); made[ck]=m; changed=true;
+    }
+    if(it.cn!==ck){ it.cn=ck; changed=true; }
+  };
+  Object.keys(DB.rpt||{}).forEach(d=>(rptItems(d)||[]).forEach(visit));
+  if(changed){
+    DB.metrics=DB.metrics||{};
+    Object.keys(made).forEach(k=>{ DB.metrics[k]=made[k]; });
+    save();
+  }
+}
+
 /* 核对时指定归属指标：写回该行，并把这个写法记成别名（下次自动认）
    key 为空表示「未归类」，会记住这个写法，下次导入仍显示未归类
    key 为 __custom 时让用户输入自定义归类名称，并加入日常追踪指标 */
@@ -3142,7 +3266,7 @@ function go(p,el){
   // 固定操作条只在指标页显示，切到别的页收起来
   const ib=document.getElementById('impActions');
   if(ib) ib.style.display=(p==='chart'||!ib.classList.contains('fixed'))?'':'none';
-  if(p==='chart'){ renderSeg(); drawChart(); setTimeout(()=>chart&&chart.resize(),50); }
+  if(p==='chart'){ initTrendSel(); renderSeg(); drawChart(); setTimeout(()=>chart&&chart.resize(),50); }
   if(p==='med') setTimeout(renderMed,30);
   if(p==='visit') renderVisit();
   if(p==='log') renderLogs();
@@ -3203,6 +3327,7 @@ async function bootstrapData(){
   try{
     const rows=await withTimeout(cloudPullAll(),15000);
     applyFacts(rows);
+    ensureAbnormalTracked();         // 历史上有过异常的项，补进日常跟踪
     cloudErrMsg='';
   }catch(e){
     cloudErrMsg=(e&&(e.message||e.error_description))||String(e);
@@ -3218,7 +3343,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.4.0 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.4.1 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
