@@ -427,7 +427,8 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
     </div>
     <div class="mt-bar">
       <select id="mtDateSel" onchange="mtSetDate(this.value)"></select>
-      <input id="mtQ" placeholder="搜索指标名" oninput="mtSearch(this.value)">
+      <input id="mtQ" placeholder="筛选原始指标名称" oninput="mtSearch(this.value)">
+      <button class="mini" id="mtClear" onclick="mtClearQ()" style="display:none;flex:0 0 auto">清空</button>
     </div>
     <div class="mt-stat" id="mtStat"></div>
     <div id="mtList"></div>
@@ -3308,6 +3309,7 @@ const mtItem=(d,i)=>rptItems(d)[i]||null;
 
 function mtSetDate(v){ mtDate=v; mtExpand=200; renderMaint(); }
 function mtSearch(v){ mtQ=String(v||'').trim(); mtExpand=200; renderMaint(); }
+function mtClearQ(){ const el=document.getElementById('mtQ'); if(el) el.value=''; mtSearch(''); }
 function mtMore(){ mtExpand+=200; renderMaint(); }
 /* 重新渲染但保住滚动位置，改一项不至于跳回顶部 */
 function mtPaint(){ const y=window.scrollY; renderMaint(); window.scrollTo(0,y); }
@@ -3332,25 +3334,40 @@ function renderMaint(){
   if(sel) sel.innerHTML='<option value="*"'+(mtDate==='*'?' selected':'')+'>全部日期（'+ds.length+' 份）</option>'+
     ds.map(d=>'<option value="'+d+'"'+(d===mtDate?' selected':'')+'>'+d+' · '+rptItems(d).length+' 项</option>').join('');
 
-  const q=mtQ.toLowerCase();
+  const q=mtQ.toLowerCase().split(/\s+/).filter(Boolean);
+  const clr=document.getElementById('mtClear');
+  if(clr) clr.style.display=mtQ?'':'none';
   const rows=[];
-  (mtDate==='*'?ds:[mtDate]).forEach(d=>{
+  const scope=(mtDate==='*'?ds:[mtDate]);
+  let totalAll=0;
+  scope.forEach(d=>{
     rptItems(d).forEach((it,i)=>{
-      if(q){
-        const k=canonOf(it);
-        const hay=(it.n+' '+(META[k]?META[k].n:'')+' '+(it.u||'')).toLowerCase();
-        if(!hay.includes(q)) return;
+      totalAll++;
+      if(q.length){
+        const nm=String(it.n||'').toLowerCase();
+        if(!q.every(t=>nm.includes(t))) return;   // 多个关键词用空格分隔，需全部命中
       }
       rows.push({d,i,it});
     });
   });
   const abn=rows.filter(x=>isAbn(x.it)).length;
   const unc=rows.filter(x=>!META[canonOf(x.it)]).length;
-  if(st) st.innerHTML='<span>共 <b>'+rows.length+'</b> 项</span><span>异常 <b>'+abn+'</b></span>'+
+  if(st) st.innerHTML=(mtQ?'<span>筛出 <b>'+rows.length+'</b> / 共 '+totalAll+' 项</span>'
+    :'<span>共 <b>'+rows.length+'</b> 项</span>')+
+    '<span>异常 <b>'+abn+'</b></span>'+
     (unc?'<span>未归类 <b>'+unc+'</b></span>':'');
   if(cnt) cnt.textContent=rows.length+' 项';
   if(!rows.length){
-    list.innerHTML='<div class="empty">没有匹配的项目</div>';
+    let extra='';
+    if(q.length&&mtDate!=='*'){
+      // 当前这份报告没有，提示其它日期里能筛出多少项，一键切过去
+      let m=0;
+      ds.forEach(dd=>{ if(dd===mtDate) return;
+        rptItems(dd).forEach(x=>{ const nm=String(x.n||'').toLowerCase(); if(q.every(t=>nm.includes(t))) m++; }); });
+      if(m) extra='<div style="margin-top:8px;font-size:12px;color:#5b6b7a">这份报告里没有，全部日期中共 <b>'+m+
+        '</b> 项 <span class="ci-cancel" onclick="mtSetDate(\'*\')">切换到全部日期</span></div>';
+    }
+    list.innerHTML='<div class="empty">没有匹配的项目</div>'+extra;
     if(more) more.innerHTML='';
     return;
   }
@@ -3545,7 +3562,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.5.0 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.5.1 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
