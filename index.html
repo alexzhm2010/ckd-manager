@@ -925,7 +925,7 @@ function showSeedHistory(){
 }
 function closeSeedHistory(){
   document.getElementById('seedModal').style.display='none';
-  try{ sessionStorage.setItem('seed_history_asked','1'); }catch(e){}
+  try{ sessionStorage.setItem('seed_history_asked_v2','1'); }catch(e){}
 }
 async function doSeedHistory(){
   const err=document.getElementById('seedErr');
@@ -949,7 +949,7 @@ async function maybeSeedHistory(){
   if(!CLOUD_ON||!cloudUser) return;
   if(FACTS.some(r=>r&&r.kind==='lab')) return;
   if(typeof ENCRYPTED_DATA==='undefined') return;
-  try{ if(sessionStorage.getItem('seed_history_asked')) return; }catch(e){}
+  try{ if(sessionStorage.getItem('seed_history_asked_v2')) return; }catch(e){}
   showSeedHistory();
 }
 
