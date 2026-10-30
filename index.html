@@ -278,14 +278,8 @@ border-radius:50%;animation:spin .85s linear infinite}
   </div>
 </div>
 <header>
-  <h1>🩺 我的肾病管理平台</h1>
-  <div class="sub">我的 · 45岁 · 慢性肾脏病4期 · 高血压 · 痛风</div>
-  <div class="chips">
-    <span class="chip" id="hdEgfr">eGFR —</span>
-    <span class="chip" id="hdDate">最近检查 —</span>
-    <span class="chip">第 4 期</span>
-    <span class="chip" id="appVer">v—</span>
-  </div>
+  <h1>🩺 肾病健康管理平台</h1>
+  <div class="sub" id="appVer">v—</div>
 </header>
 <div class="app">
 
@@ -917,11 +911,6 @@ function renderHome(){
   document.getElementById('todoHome').innerHTML=todoHtml;
 
   document.getElementById('todayStr').textContent=today();
-  const e=last('egfr'); if(e) document.getElementById('hdEgfr').textContent='eGFR '+e.v;
-  // 头部「最近检查」取所有指标里最新的那次日期，之前只写死在 HTML 里不会更新
-  let latest='';
-  Object.keys(META).forEach(key=>{ const l=last(key); if(l&&l.date>latest) latest=l.date; });
-  document.getElementById('hdDate').textContent='最近检查 '+(latest||'—');
 }
 
 function toggleMed(k){
@@ -3353,7 +3342,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.6.4 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.6.5 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
