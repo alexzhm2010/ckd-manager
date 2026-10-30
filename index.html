@@ -260,13 +260,13 @@ border-radius:50%;animation:spin .85s linear infinite}
 </head>
 <body>
 <div id="login" class="login">
-  <div id="bootBox" class="boot"><div class="spin"></div><div class="t" id="bootTxt">正在恢复登录状态…</div></div>
-  <div class="login-card" id="loginCard" style="display:none">
+  <div id="bootBox" class="boot" style="display:none"><div class="spin"></div><div class="t" id="bootTxt">正在加载数据…</div></div>
+  <div class="login-card" id="loginCard">
     <div class="login-logo">🩺</div>
     <h2>肾病健康管理平台</h2>
     <div id="cloudLogin">
-      <div class="hint">用邮箱登录；数据只存在云端，本机不保存任何数据</div>
-      <input type="email" id="cloudEmail" placeholder="邮箱" autocomplete="username" inputmode="email" style="letter-spacing:0;font-size:15px">
+      <div class="hint">数据只存在云端，本机不保存。邮箱会记住，每次使用都需要输入密码</div>
+      <input type="email" id="cloudEmail" placeholder="邮箱（会记住）" autocomplete="username" inputmode="email" style="letter-spacing:0;font-size:15px">
       <input type="password" id="cloudPwd" placeholder="密码" autocomplete="current-password">
       <button class="btn" onclick="doCloudLogin()">登录</button>
       <div class="login-err" id="cloudErr"></div>
@@ -739,10 +739,12 @@ function persistFacts(){
 }
 
 /* ==================== 云端同步 ==================== */
+/* 不持久化登录态：每次打开页面都要重新输密码（邮箱会记住），
+   避免设备被他人拿到后打开浏览器就直接看到健康数据 */
 async function getSupabase(){
   if(supa) return supa;
   const mod=await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
-  supa=mod.createClient(CLOUD.url,CLOUD.anonKey,{auth:{persistSession:true,autoRefreshToken:true}});
+  supa=mod.createClient(CLOUD.url,CLOUD.anonKey,{auth:{persistSession:false,autoRefreshToken:true}});
   return supa;
 }
 
@@ -3299,6 +3301,7 @@ async function doCloudLogin(){
     const {data,error}=await sb.auth.signInWithPassword({email,password:pwd});
     if(error) throw error;
     cloudUser=data.user||(data.session&&data.session.user);
+    try{ localStorage.setItem('ckd_email',email); }catch(e){}   // 只记住邮箱，密码每次重输
     err.textContent='正在加载数据…';
     await startApp();
   }catch(e){ showLogin(); err.textContent=authMsg(e); }
@@ -3320,6 +3323,7 @@ async function doCloudSignUp(){
       return;
     }
     cloudUser=data.user;
+    try{ localStorage.setItem('ckd_email',email); }catch(e){}
     await startApp();
   }catch(e){ err.textContent=authMsg(e); }
 }
@@ -3349,7 +3353,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.6.2 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.6.3 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
@@ -3374,22 +3378,26 @@ function restorePage(){
 }
 window.addEventListener('resize',()=>{ chart&&chart.resize(); });
 
-/* 页面打开先尝试恢复登录态，登录过一个设备就不用再输一次 */
-(function restoreCloudSession(){
+/* 每次打开页面都要输入密码：清掉旧版持久化的会话，只回填邮箱，直接显示登录表单 */
+(function initLoginScreen(){
+  try{
+    // 浏览器里可能残留旧版本保存的 Supabase 会话，先清掉，避免打开即自动登录
+    const stale=[];
+    for(let i=0;i<localStorage.length;i++){
+      const k=localStorage.key(i);
+      if(k&&/^(sb-.*-auth-token|supabase-auth-token)$/.test(k)) stale.push(k);
+    }
+    stale.forEach(k=>localStorage.removeItem(k));
+  }catch(e){}
+  let saved='';
+  try{ saved=localStorage.getItem('ckd_email')||''; }catch(e){}
+  const em=document.getElementById('cloudEmail');
+  if(em&&saved) em.value=saved;
   if(!CLOUD_ON){
     document.getElementById('cloudLogin').style.display='none';
     document.getElementById('cloudOff').style.display='block';
-    showLogin();
-    return;
   }
-  showBoot('正在恢复登录状态…');
-  getSupabase().then(sb=>sb.auth.getSession()).then(({data})=>{
-    if(data&&data.session&&data.session.user){
-      cloudUser=data.session.user;
-      return startApp();
-    }
-    showLogin();          // 没有已保存的会话，才显示登录表单
-  }).catch(e=>{ console.warn('云端会话恢复失败',e); showLogin(); });
+  showLogin();
 })();
 </script>
 </body>
