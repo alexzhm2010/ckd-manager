@@ -263,9 +263,6 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
     <h2><span class="t"><span class="bar"></span>待办事项</span></h2>
     <div id="todoHome"></div>
   </div>
-  <div style="text-align:center;margin:2px 0 6px">
-    <button class="mini" onclick="cloudSignOut()">退出账号</button>
-  </div>
 </section>
 
 <!-- ============ 记录 ============ -->
@@ -2737,15 +2734,6 @@ async function doCloudSignUp(){
   }catch(e){ err.textContent=authMsg(e); }
 }
 
-function showLogin(){
-  document.getElementById('login').style.display='flex';
-}
-async function cloudSignOut(){
-  if(!confirm('退出账号？数据只存在云端，退出后本机不再保留任何数据。')) return;
-  try{ const sb=await getSupabase(); await sb.auth.signOut(); }catch(e){}
-  cloudUser=null; cloudErrMsg=''; pendingUp.clear(); pendingDel.clear();
-  location.reload();
-}
 document.getElementById('cloudPwd').addEventListener('keydown',e=>{ if(e.key==='Enter') doCloudLogin(); });
 
 /* 启动数据：只从云端 facts 表读取，本机不保留数据 */
