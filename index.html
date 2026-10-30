@@ -224,24 +224,16 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
   <div class="login-card">
     <div class="login-logo">🩺</div>
     <h2>肾病健康管理平台</h2>
-    <div id="cloudLogin" style="display:none">
-      <div class="hint">登录云端账号，数据在多台设备间同步</div>
+    <div id="cloudLogin">
+      <div class="hint">用邮箱登录，数据在多台设备间同步</div>
       <input type="email" id="cloudEmail" placeholder="邮箱" autocomplete="username" inputmode="email" style="letter-spacing:0;font-size:15px">
       <input type="password" id="cloudPwd" placeholder="密码" autocomplete="current-password">
-      <button class="btn" onclick="doCloudLogin()">登录并同步</button>
+      <button class="btn" onclick="doCloudLogin()">登录</button>
       <div class="login-err" id="cloudErr"></div>
-      <div class="login-secure">还没有账号？<a href="#" onclick="doCloudSignUp();return false">用此邮箱注册</a>
-        · <a href="#" onclick="toggleLoginMode();return false">改用本机密码解锁</a></div>
+      <div class="login-secure">还没有账号？<a href="#" onclick="doCloudSignUp();return false">用此邮箱注册</a></div>
     </div>
-    <div id="localLogin">
-      <div class="hint">输入访问密码以查看您的健康数据</div>
-      <input type="password" id="pwd" placeholder="访问密码" autocomplete="off" inputmode="text">
-      <button class="btn" onclick="doLogin()">解锁查看</button>
-      <div class="login-err" id="loginErr"></div>
-      <div class="login-secure">🔒 数据已用 AES-256-GCM 加密，密码仅在您的设备本地用于解密，不会上传、服务器也不保存。</div>
-    </div>
-    <div class="login-secure" id="switchCloud" style="display:none">
-      <a href="#" onclick="toggleLoginMode();return false">改用云端账号登录</a>
+    <div id="cloudOff" class="hint" style="display:none">
+      当前未配置云端账号：请在 cloud-config.js 中填入 Supabase 地址与 anon key 后重新发布。
     </div>
   </div>
 </div>
@@ -461,23 +453,9 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
 </nav>
 <div class="toast" id="toast"></div>
 
-<!-- 云端空档时的一次性历史导入面板 -->
-<div id="seedModal" class="login" style="display:none">
-  <div class="login-card">
-    <div class="login-logo">📊</div>
-    <h2>导入本机历史数据</h2>
-    <div class="hint">云端账号里还没有指标数据。本机带有加密的历史基线，输入原来的访问密码即可一次性导入并同步，只需一次。</div>
-    <input type="password" id="seedPwd" placeholder="原访问密码" autocomplete="current-password">
-    <button class="btn" onclick="doSeedHistory()">导入并同步</button>
-    <div class="login-err" id="seedErr"></div>
-    <div class="login-secure"><a href="#" onclick="closeSeedHistory();return false">稍后再说</a></div>
-  </div>
-</div>
-
 <script>
 /* ==================== 数据 ==================== */
 </script>
-<script src="history.js"></script>
 <script src="cloud-config.js"></script>
 <script>
 const KEY='kidney_mgr_v1';
@@ -633,28 +611,6 @@ function mergeFacts(a,b){
   return [...m.values()];
 }
 
-/* 历史密文解密出来的 H 只作为「更早的导入」一次性灌进 facts，source='seed' */
-function historyFacts(H){
-  const out=[];
-  if(!H) return out;
-  Object.keys(H).forEach(key=>{
-    const arr=H[key]||[];
-    arr.forEach(x=>{
-      if(!x||!x.date||x.v==null) return;
-      const v=Number(x.v);
-      if(!isFinite(v)) return;
-      const m=META[key]||{};
-      out.push({
-        uid:'lab|'+x.date+'|'+key, kind:'lab', date:x.date, key, canon:key,
-        name:m.n||key, value:v, unit:m.u||'',
-        ref_lo:m.ref?m.ref[0]:null, ref_hi:m.ref?m.ref[1]:null,
-        flag:flagOf(v,m), source:'seed', updated_at:1, created_at:1
-      });
-    });
-  });
-  return out;
-}
-
 function rptUid(date,it){
   return 'rpt|'+date+'|'+normName(it.n)+'|'+normUnit(it.u);
 }
@@ -794,13 +750,11 @@ function persistFacts(){
   if(up.length||del.length) queueCloudSync(up,del);
 }
 
-/* 启动时：本地缓存 + 历史密文 + 本地 DB 合成一份 facts */
+/* 启动时：本地缓存 + 本地 DB 合成一份 facts */
 function localHydrate(){
   let rows=readFactCache();
   FACTMAP=new Map(rows.map(r=>[r.uid,r]));
   buildCanonMap(rows);          // 先认下本地缓存的别名，后面的推导才能用上
-  rows=mergeFacts(rows,historyFacts(window.HISTORY));
-  FACTMAP=new Map(rows.map(r=>[r.uid,r]));
   rows=mergeFacts(rows,deriveFacts(DB,false));
   applyFacts(rows);
 }
@@ -924,56 +878,14 @@ async function cloudSyncNow(){
   }
 }
 
-/* 云端登录后，需要把本机那份加密历史灌进 facts 一次。
-   历史基线随仓库分发，任何设备都有；但只有原访问密码能解开，所以必须问一次。 */
-function seedHistoryPrompt(){ showSeedHistory(); }
-
-function showSeedHistory(){
-  const m=document.getElementById('seedModal');
-  if(!m) return;
-  document.getElementById('seedErr').textContent='';
-  document.getElementById('seedPwd').value='';
-  m.style.display='flex';
-  setTimeout(()=>{ const i=document.getElementById('seedPwd'); if(i) i.focus(); },60);
-}
-function closeSeedHistory(){
-  document.getElementById('seedModal').style.display='none';
-  try{ sessionStorage.setItem('seed_history_asked_v2','1'); }catch(e){}
-}
-async function doSeedHistory(){
-  const err=document.getElementById('seedErr');
-  const pwd=document.getElementById('seedPwd').value;
-  if(!pwd){ err.textContent='请输入原来的访问密码'; return; }
-  err.textContent='解密中…';
-  const H=await tryDecryptHistory(pwd);
-  if(!H){ err.textContent='密码不正确，请重试'; return; }
-  window.HISTORY=H;
-  const seed=historyFacts(H).filter(r=>!FACTMAP.has(r.uid));
-  if(!seed.length){ err.textContent='历史数据已全部在云端'; setTimeout(closeSeedHistory,800); return; }
-  applyFacts(mergeFacts(FACTS,seed));
-  closeSeedHistory();
-  renderLogs(); renderRpt(); renderHome(); renderVisit(); drawChart(); renderCloud();
-  queueCloudSync(seed,[]);
-  toast(`已导入 ${seed.length} 条历史指标，正在同步…`);
-}
-
-/* 云端账号还空着、而本机带着加密历史基线时，登录后主动弹出一次导入面板 */
-async function maybeSeedHistory(){
-  if(!CLOUD_ON||!cloudUser) return;
-  if(FACTS.some(r=>r&&r.kind==='lab')) return;
-  if(typeof ENCRYPTED_DATA==='undefined') return;
-  try{ if(sessionStorage.getItem('seed_history_asked_v2')) return; }catch(e){}
-  showSeedHistory();
-}
-
 /* ==================== 云端状态卡片 ==================== */
 function renderCloud(){
   const box=document.getElementById('cloudBox');
   const tag=document.getElementById('cloudTag');
   if(!box) return;
   if(!CLOUD_ON){
-    tag.textContent='本地模式';
-    box.innerHTML=`<div class="muted" style="line-height:1.8">数据保存在本机浏览器。在 cloud-config.js 填入 Supabase 地址与 anon key 后，可开启跨设备同步。</div>`;
+    tag.textContent='未配置';
+    box.innerHTML=`<div class="muted" style="line-height:1.8">请在 cloud-config.js 填入 Supabase 地址与 anon key，才能登录并同步数据。</div>`;
     return;
   }
   cloudLastSync=cloudLastSync||0;
@@ -985,16 +897,13 @@ function renderCloud(){
   }
   tag.textContent=cloudFlushing?'同步中…':(cloudErrMsg?'同步失败':'已连接');
   const when=cloudLastSync?('上次同步 '+new Date(cloudLastSync).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})):'本次尚未同步';
-  const hasLab=FACTS.some(r=>r&&r.kind==='lab');
   box.innerHTML=`<div class="muted">账号 ${esc(cloudUser.email||'')}</div>
     <div class="muted">${when}</div>
     ${cloudErrMsg?`<div class="imp-dup" style="margin-top:8px">同步失败：${esc(cloudErrMsg)}</div>`:''}
-    ${!hasLab?`<div class="imp-warn" style="margin-top:8px">云端还没有指标数据。本机如带有加密的历史基线，点「导入本机历史」并输入原来的访问密码，即可一次性同步。</div>`:''}
     <div class="imp-actions" style="margin-top:12px">
       <button class="btn ghost" onclick="cloudSyncNow()">立即同步</button>
-      <button class="btn ghost" onclick="seedHistoryPrompt()">导入本机历史</button>
     </div>
-    <div style="margin-top:10px"><button class="mini" onclick="cloudSignOut()">退出云端账号</button></div>`;
+    <div style="margin-top:10px"><button class="mini" onclick="cloudSignOut()">退出账号</button></div>`;
 }
 
 /* ==================== 工具 ==================== */
@@ -2871,23 +2780,7 @@ function go(p,el){
   if(p==='log') renderLogs();
 }
 
-/* ==================== 登录与解密 ==================== */
-const PBKDF2_ITER = 210000;
-function b64ToBytes(b){ const s=atob(b); const u=new Uint8Array(s.length); for(let i=0;i<s.length;i++) u[i]=s.charCodeAt(i); return u; }
-async function deriveKey(pwd, salt){
-  const enc=new TextEncoder();
-  const km=await crypto.subtle.importKey('raw', enc.encode(pwd), 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey({name:'PBKDF2', salt, iterations:PBKDF2_ITER, hash:'SHA-256'}, km, {name:'AES-GCM', length:256}, false, ['decrypt']);
-}
-/* 用同一个密码试解历史密文；解不开返回 null（云端账号密码可能与它不同） */
-async function tryDecryptHistory(pwd){
-  if(!window.crypto||!crypto.subtle) return null;
-  try{
-    const key=await deriveKey(pwd, b64ToBytes(ENCRYPTED_DATA.salt));
-    const pt=await crypto.subtle.decrypt({name:'AES-GCM', iv:b64ToBytes(ENCRYPTED_DATA.iv)}, key, b64ToBytes(ENCRYPTED_DATA.ct));
-    return JSON.parse(new TextDecoder().decode(pt));
-  }catch(e){ return null; }
-}
+/* ==================== 登录 ==================== */
 const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('云端连接超时')),ms))]);
 
 function authMsg(e){
@@ -2896,22 +2789,6 @@ function authMsg(e){
   if(/email not confirmed/i.test(m)) return '邮箱还没确认：请到 Supabase 关闭邮箱确认，或点邮件里的链接';
   if(/user already registered/i.test(m)) return '该邮箱已注册，直接登录即可';
   return m||'登录失败，请重试';
-}
-
-async function doLogin(){
-  const err=document.getElementById('loginErr');
-  if(!window.crypto || !crypto.subtle){
-    err.textContent='当前打开方式无法解密（需 https 或 localhost）。请使用 GitHub Pages 链接打开。';
-    return;
-  }
-  const pwd=document.getElementById('pwd').value;
-  if(!pwd){ err.textContent='请输入密码'; return; }
-  err.textContent='解密中…';
-  const H=await tryDecryptHistory(pwd);
-  if(!H){ err.textContent='密码错误，请重试'; return; }
-  window.HISTORY=H;
-  err.textContent='正在加载数据…';
-  await startApp();
 }
 
 async function doCloudLogin(){
@@ -2925,8 +2802,6 @@ async function doCloudLogin(){
     const {data,error}=await sb.auth.signInWithPassword({email,password:pwd});
     if(error) throw error;
     cloudUser=data.user||(data.session&&data.session.user);
-    const H=await tryDecryptHistory(pwd);
-    if(H) window.HISTORY=H;               // 密码恰好一致时顺手把本机历史灌进来
     err.textContent='正在加载数据…';
     await startApp();
   }catch(e){ err.textContent=authMsg(e); }
@@ -2948,40 +2823,22 @@ async function doCloudSignUp(){
       return;
     }
     cloudUser=data.user;
-    const H=await tryDecryptHistory(pwd);
-    if(H) window.HISTORY=H;
     await startApp();
   }catch(e){ err.textContent=authMsg(e); }
 }
 
-function toggleLoginMode(){
-  if(!CLOUD_ON) return;
-  const c=document.getElementById('cloudLogin');
-  const sw=document.getElementById('switchCloud');
-  const showCloud=c.style.display==='none';
-  c.style.display=showCloud?'block':'none';
-  document.getElementById('localLogin').style.display=showCloud?'none':'block';
-  sw.style.display=showCloud?'none':'block';
-}
 function showLogin(){
-  const l=document.getElementById('login');
-  l.style.display='flex';
-  if(CLOUD_ON){
-    document.getElementById('cloudLogin').style.display='block';
-    document.getElementById('localLogin').style.display='none';
-    document.getElementById('switchCloud').style.display='none';
-  }
+  document.getElementById('login').style.display='flex';
 }
 async function cloudSignOut(){
-  if(!confirm('退出云端账号？本机缓存仍保留，重新登录后以云端数据为准。')) return;
+  if(!confirm('退出账号？本机缓存仍保留，重新登录后以云端数据为准。')) return;
   try{ const sb=await getSupabase(); await sb.auth.signOut(); }catch(e){}
   cloudUser=null; cloudErrMsg=''; pendingUp.clear(); pendingDel.clear();
   location.reload();
 }
-document.getElementById('pwd').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
 document.getElementById('cloudPwd').addEventListener('keydown',e=>{ if(e.key==='Enter') doCloudLogin(); });
 
-/* 启动数据：本地 facts（含历史密文）→ 若已登录云端则拉取合并 */
+/* 启动数据：本地缓存 → 若已登录云端则拉取合并 */
 async function bootstrapData(){
   localHydrate();
   if(!CLOUD_ON||!cloudUser) return;
@@ -3016,16 +2873,16 @@ async function initApp(){
   renderLogs(); renderRpt(); renderKSym(); renderKnow(); initImport(); renderCloud();
   if(window.__echartsReady) await window.__echartsReady;
   renderHome();
-  await maybeSeedHistory();
 }
 window.addEventListener('resize',()=>{ chart&&chart.resize(); medChart&&medChart.resize(); });
 
-/* 配置了云端时，页面打开先尝试恢复登录态，登录过一个设备就不用再输密码 */
+/* 页面打开先尝试恢复登录态，登录过一个设备就不用再输一次 */
 (function restoreCloudSession(){
-  if(!CLOUD_ON) return;
-  document.getElementById('cloudLogin').style.display='block';
-  document.getElementById('localLogin').style.display='none';
-  document.getElementById('switchCloud').style.display='none';
+  if(!CLOUD_ON){
+    document.getElementById('cloudLogin').style.display='none';
+    document.getElementById('cloudOff').style.display='block';
+    return;
+  }
   getSupabase().then(sb=>sb.auth.getSession()).then(({data})=>{
     if(data&&data.session&&data.session.user){
       cloudUser=data.session.user;
