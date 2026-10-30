@@ -458,6 +458,16 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
 </script>
 <script src="cloud-config.js"></script>
 <script>
+/* 一次性重置本机缓存：用 ...?reset=1 打开时会清掉本机历史数据（登录状态保留），
+   随后自动回到不带参数的地址。云端数据被清空后，靠它避免旧缓存被重新上传。 */
+(function(){
+  try{
+    if(new URLSearchParams(location.search).get('reset')!=='1') return;
+    localStorage.removeItem('kidney_facts_v2');
+    localStorage.removeItem('kidney_mgr_v1');
+    location.replace(location.pathname+location.hash);
+  }catch(e){}
+})();
 const KEY='kidney_mgr_v1';
 let FACTS_READY=false;      // 等下面的表结构和 META 都就绪后，save 才写 facts
 const DEFAULT={
