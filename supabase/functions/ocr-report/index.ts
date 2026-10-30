@@ -210,7 +210,24 @@ Deno.serve(async (req) => {
           .join(' '),
       );
 
-    return json({ items, date, provider: 'baidu-medical', total: items.length });
+    // 通用信息里的医院/科室/受检人/标本类型，一起回传，前端按“报告级信息”入库
+    const cMap: Record<string, string> = {};
+    for (const x of (Array.isArray(cd) ? cd : [cd])) {
+      const wn = typeof x?.word_name === 'string' ? x.word_name.trim() : '';
+      if (wn) cMap[wn] = toText(x?.word != null ? x.word : x);
+    }
+    const pickc = (keys: string[]) => keys.map((k) => cMap[k]).find((v) => v && v.trim()) || '';
+    const info = {
+      hospital: pickc(['医院', '医院名称', '医疗机构', '检查医院']),
+      dept: pickc(['科室', '检查科室', '送检科室', '申请科室']),
+      patient: pickc(['姓名']),
+      sex: pickc(['性别']),
+      age: pickc(['年龄']),
+      specimen: pickc(['标本种类', '标本类型', '标本']),
+      title: pickc(['报告单名称', '检查项目', '检验项目']),
+    };
+
+    return json({ items, date, common: info, provider: 'baidu-medical', total: items.length });
   } catch (e) {
     return json({ error: String((e as Error)?.message || e) }, 500);
   }

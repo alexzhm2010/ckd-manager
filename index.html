@@ -659,6 +659,23 @@ function deriveFacts(db,touch){
       });
     });
   });
+
+  // 报告级信息（医院/科室/受检人/标本类型）：一份报告一行，kind='rptmeta'
+  Object.keys(db.rpt||{}).forEach(date=>{
+    const m=db.rpt[date]&&db.rpt[date].meta;
+    if(!m) return;
+    const info={};
+    Object.keys(m).forEach(k=>{ if(m[k]) info[k]=String(m[k]); });
+    if(!Object.keys(info).length) return;
+    const uid='rptmeta|'+date;
+    const prev=FACTMAP.get(uid);
+    const changed=!prev||JSON.stringify((prev.meta||{}).info)!==JSON.stringify(info);
+    rows.push({
+      uid, kind:'rptmeta', date, key:'rptmeta', name:info.hospital||'化验报告', value:null,
+      meta:{info}, source:'import',
+      updated_at:stamp(prev,changed), created_at:prev?prev.created_at:at
+    });
+  });
   return rows;
 }
 
@@ -668,7 +685,7 @@ function applyFacts(rows){
   FACTMAP=new Map(rows.filter(r=>r&&r.uid).map(r=>[r.uid,r]));
   buildCanonMap(rows);
   const db=blankDb();
-  const rptBox={};
+  const rptBox={}, metaBox={};
   rows.forEach(r=>{
     if(!r) return;
     if(r.kind==='lab'&&r.date&&r.key){
@@ -678,6 +695,8 @@ function applyFacts(rows){
       if(r.raw!=null) it.raw=r.raw;
       if(r.canon&&META[r.canon]) it.cn=r.canon;   // 只保留真正的规范指标 key
       (rptBox[r.date]=rptBox[r.date]||[]).push({it,ord:(r.meta&&r.meta.ord)||0});
+    }else if(r.kind==='rptmeta'&&r.date){
+      metaBox[r.date]=r.meta&&r.meta.info?r.meta.info:{};
     }else if(r.kind==='block'&&r.key){
       db[r.key]=r.meta&&r.meta.data!==undefined?r.meta.data:
         ((r.key==='logs'||r.key==='visits')?[]:{});
@@ -685,6 +704,7 @@ function applyFacts(rows){
   });
   Object.keys(rptBox).forEach(d=>{
     db.rpt[d]={items:rptBox[d].sort((a,b)=>a.ord-b.ord).map(x=>x.it)};
+    if(metaBox[d]) db.rpt[d].meta=metaBox[d];
   });
   DB=db;
   rebuildIndex(rows);
@@ -1308,7 +1328,7 @@ async function cloudOcrAll(jobs,run){
   const out=[];
   try{
     for(const job of jobs){
-      let text='', items=[], date='';
+      let text='', items=[], date='', meta=null;
       for(const pg of job.pages){
         if(run!==impRunId) return null;
         if(pg.text){ text+='\n'+pg.text; continue; }
@@ -1319,8 +1339,13 @@ async function cloudOcrAll(jobs,run){
         if(j.items&&j.items.length) items=items.concat(j.items);
         if(j.date) date=j.date;
         if(j.text) text+='\n'+j.text;
+        // 医院/科室等报告级信息：多页时各字段取第一个非空值
+        if(j.common&&typeof j.common==='object'){
+          meta=meta||{};
+          Object.keys(j.common).forEach(k=>{ if(!meta[k]&&j.common[k]) meta[k]=String(j.common[k]).trim(); });
+        }
       }
-      out.push({date,text,items});
+      out.push({date,text,items,meta});
     }
   }catch(e){
     return null;                                  // 没配密钥/额度用完/网络问题 → 本地兜底
@@ -1471,7 +1496,7 @@ async function parseReports(){
         const dt=cr.date||findDate(cr.text||'')||today();
         if(cr.text) impTextAll+=(impTextAll?'\n\n':'')+cr.text;
         if(items.length){
-          impRpt.push({date:dt,src:job.name+'（云端）',items,max:0,missing:0});
+          impRpt.push({date:dt,src:job.name+'（云端）',items,max:0,missing:0,meta:cr.meta||null});
           trackCloudItems(items,dt,job.name);
         }else if(cr.text){
           extractFromText(cr.text,job.name);
@@ -2264,12 +2289,15 @@ function renderRpt(){
     const items=rptItems(d);
     const abn=items.filter(isAbn);
     const open=!!rptOpen[d];
+    const rm=(DB.rpt[d]&&DB.rpt[d].meta)||{};
+    const who=[rm.hospital,rm.dept].filter(Boolean).join(' · ');
     return `<div style="margin-bottom:16px">
       <div class="rpt-hd">
         <b>${d}</b>
         <span class="s" style="color:${abn.length?'#d93a3a':'#7b8794'}">${items.length} 项${abn.length?` · ${abn.length} 项异常`:' · 全部在参考范围'}</span>
         <button class="mini rpt-del" onclick="delRpt('${d}')" title="删除这份报告">删除</button>
       </div>
+      ${who?`<div style="font-size:10.5px;color:#7b8794;margin:0 0 6px">🏥 ${esc(who)}${rm.specimen?` · 标本 ${esc(rm.specimen)}`:''}</div>`:''}
       ${(open?items:(abn.length?abn:items.slice(0,6))).map(row).join('')}
       ${!abn.length?'<div class="s" style="font-size:11.5px;color:#7b8794">各项均在参考范围内</div>':''}
       ${(open||items.length>(abn.length||6))?`<div class="rpt-more"><button class="mini" onclick="toggleRpt('${d}')">${open?'收起':'展开全部 '+items.length+' 项'}</button></div>`:''}
@@ -2448,11 +2476,16 @@ function groupImp(){
   const map=new Map();
   for(const r of impRpt){
     const d=r.date||'';
-    const g=map.get(d)||{date:d,src:[],items:[],max:0,missing:0};
+    const g=map.get(d)||{date:d,src:[],items:[],max:0,missing:0,meta:null};
     for(const it of r.items){
       if(!g.items.some(x=>sameItem(x,it))) g.items.push(it);
     }
     if(r.src&&g.src.indexOf(r.src)<0) g.src.push(r.src);
+    // 报告级信息（医院/科室/受检人/标本类型）合并到同一份报告
+    if(r.meta){
+      g.meta=g.meta||{};
+      Object.keys(r.meta).forEach(k=>{ if(!g.meta[k]&&r.meta[k]) g.meta[k]=r.meta[k]; });
+    }
     if((r.max||0)>g.max) g.max=r.max;
     g.missing+=(r.missing||0);
     map.set(d,g);
@@ -2876,6 +2909,8 @@ function confirmImport(){
   for(const g of groups){
     const d=g.date||'日期未识别';
     const cur=DB.rpt[d]=(DB.rpt[d]&&DB.rpt[d].items)?DB.rpt[d]:{items:[]};
+    // 医院/科室等报告级信息：存进这份报告的 meta，跟项目一起进 facts
+    if(g.meta&&Object.keys(g.meta).some(k=>g.meta[k])) cur.meta=Object.assign({},cur.meta,g.meta);
     for(const it of g.items){
       const save={n:it.n,v:it.v,u:it.u,lo:it.lo,hi:it.hi,st:it.st,rf:it.rf||''};
       if(it.raw!=null) save.raw=it.raw;      // 自动修正过的留痕
@@ -3101,7 +3136,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.3.2 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.3.3 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
