@@ -2352,8 +2352,10 @@ function keyOfName(n){
     if((ALIAS[k]||[]).some(a=>a.toLowerCase()===nm)) return k;
   }
   // 包含匹配时取「最长别名」：避免「估算肾小球滤过率（肌酐）」被判成肌酐
+  // 同时套用 EXCL：前白蛋白≠白蛋白、平均血红蛋白浓度≠血红蛋白、尿微量白蛋白≠白蛋白
   let best=null,bestLen=0;
   for(const k of keys){
+    if((EXCL[k]||[]).some(x=>nm.includes(x.toLowerCase()))) continue;
     for(const a of (ALIAS[k]||[])){
       if(a.length>=2&&nm.includes(a.toLowerCase())&&a.length>bestLen){ best=k; bestLen=a.length; }
     }
@@ -2774,6 +2776,7 @@ function renderImpResult(){
   }
 
   // ② 逐项核对
+  const autoN=groups.reduce((s,g)=>s+g.items.filter(it=>META[canonOf(it)]).length,0);
   let html=`<div class="imp-ok"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
       <b>✅ 识别到 ${allItems} 项</b>
       <span class="ci-pg" id="impPg">已核对 <b>0</b>/${allItems} 项 · <span class="ci-cancel" onclick="clearImp()">取消导入</span></span>
@@ -2781,7 +2784,8 @@ function renderImpResult(){
     <div style="margin-top:5px;font-size:11.5px;color:#5b6b7a;line-height:1.65">
       照原件核对，<b>数值可直接点开改</b>，无误点右侧 ○；全部核对完才写入${
         allAbn?`（<span style="color:#d93a3a">${allAbn} 项超出参考范围</span>）`:''}。<br>
-      医院写的名字和档案不一样？把每行右侧的「未归类」改成对应指标即可，以后这种写法会自动认出来。
+      其中 <b>${autoN} 项已自动归类</b>到日常追踪指标；其余（如肝酶、胆红素等非追踪项）保持原件名称存档。
+      名字对不上时在右侧下拉指定一次，以后这种写法会自动认出来。
     </div>
   </div>`;
 
@@ -3097,7 +3101,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.3.1 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.3.2 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
