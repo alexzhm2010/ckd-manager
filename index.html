@@ -263,9 +263,8 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
     <h2><span class="t"><span class="bar"></span>待办事项</span></h2>
     <div id="todoHome"></div>
   </div>
-  <div class="card" id="cloudCard">
-    <h2><span class="t"><span class="bar"></span>数据存储</span><span class="muted" id="cloudTag"></span></h2>
-    <div id="cloudBox"></div>
+  <div style="text-align:center;margin:2px 0 6px">
+    <button class="mini" onclick="cloudSignOut()">退出账号</button>
   </div>
 </section>
 
@@ -559,7 +558,7 @@ const CLOUD_ON=!!(CLOUD.url&&CLOUD.anonKey);
 let FACTS=[];                 // 当前生效的全部 facts 行
 let FACTMAP=new Map();        // uid -> row，便于按业务键比对
 let LABIDX=new Map();         // 指标 key -> [{date,v}]，seriesOf 直接用
-let supa=null, cloudUser=null, cloudLastSync=0, cloudErrMsg='';
+let supa=null, cloudUser=null, cloudErrMsg='';
 let cloudFlushing=false, cloudSyncTimer=null;
 let pendingUp=new Map(), pendingDel=new Set();
 
@@ -785,7 +784,7 @@ async function flushCloud(){
     return;
   }
   if(!pendingUp.size&&!pendingDel.size) return;
-  cloudFlushing=true; renderCloud();
+  cloudFlushing=true;
   const up=[...pendingUp.values()]; pendingUp.clear();
   const del=[...pendingDel]; pendingDel.clear();
   try{
@@ -800,67 +799,21 @@ async function flushCloud(){
       const {error}=await sb.from('facts').delete().eq('user_id',cloudUser.id).in('uid',chunk);
       if(error) throw error;
     }
-    cloudLastSync=Date.now(); cloudErrMsg='';
+    cloudErrMsg='';
   }catch(e){
     up.forEach(r=>pendingUp.set(r.uid,r));
     del.forEach(uid=>pendingDel.add(uid));
+    const first=!cloudErrMsg;
     cloudErrMsg=(e&&(e.message||e.error_description||e.hint))||String(e);
     console.warn('云端同步失败',e);
+    if(first) toast('保存失败，请检查网络');
   }finally{
-    cloudFlushing=false; renderCloud();
+    cloudFlushing=false;
     // 同步过程中又有新改动，补排一次
     if(cloudUser&&(pendingUp.size||pendingDel.size)&&!cloudSyncTimer){
       cloudSyncTimer=setTimeout(()=>{ cloudSyncTimer=null; flushCloud(); },1200);
     }
   }
-}
-
-/* 手动同步：先把未上传的改动推上去，再以云端数据为准全量刷新 */
-async function cloudSyncNow(){
-  if(!cloudUser){ showLogin(); return; }
-  toast('正在同步…');
-  try{
-    await flushCloud();
-    let rows=await cloudPullAll();
-    // 推送失败的改动仍在内存队列里，合并回来，避免被云端数据盖掉
-    if(pendingUp.size) rows=mergeFacts(rows,[...pendingUp.values()]);
-    if(pendingDel.size) rows=rows.filter(r=>!pendingDel.has(r.uid));
-    applyFacts(rows);
-    renderLogs(); renderRpt(); renderHome(); renderVisit(); renderCloud(); drawChart();
-    toast('已同步');
-  }catch(e){
-    cloudErrMsg=(e&&(e.message||e.error_description))||String(e);
-    renderCloud();
-    toast('同步失败：'+cloudErrMsg);
-  }
-}
-
-/* ==================== 云端状态卡片 ==================== */
-function renderCloud(){
-  const box=document.getElementById('cloudBox');
-  const tag=document.getElementById('cloudTag');
-  if(!box) return;
-  if(!CLOUD_ON){
-    tag.textContent='未配置';
-    box.innerHTML=`<div class="muted" style="line-height:1.8">请在 cloud-config.js 填入 Supabase 地址与 anon key，才能登录并同步数据。</div>`;
-    return;
-  }
-  cloudLastSync=cloudLastSync||0;
-  if(!cloudUser){
-    tag.textContent='未登录';
-    box.innerHTML=`<div class="muted" style="margin-bottom:10px">云端已配置，登录后数据会在多台设备间同步。</div>
-      <button class="btn" onclick="showLogin()">登录云端账号</button>`;
-    return;
-  }
-  tag.textContent=cloudFlushing?'同步中…':(cloudErrMsg?'同步失败':'已连接');
-  const when=cloudLastSync?('上次同步 '+new Date(cloudLastSync).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})):'本次尚未同步';
-  box.innerHTML=`<div class="muted">账号 ${esc(cloudUser.email||'')}</div>
-    <div class="muted">${when}</div>
-    ${cloudErrMsg?`<div class="imp-dup" style="margin-top:8px">同步失败：${esc(cloudErrMsg)}</div>`:''}
-    <div class="imp-actions" style="margin-top:12px">
-      <button class="btn ghost" onclick="cloudSyncNow()">立即同步</button>
-    </div>
-    <div style="margin-top:10px"><button class="mini" onclick="cloudSignOut()">退出账号</button></div>`;
 }
 
 /* ==================== 工具 ==================== */
@@ -2801,7 +2754,7 @@ async function bootstrapData(){
   try{
     const rows=await withTimeout(cloudPullAll(),15000);
     applyFacts(rows);
-    cloudErrMsg=''; cloudLastSync=Date.now();
+    cloudErrMsg='';
   }catch(e){
     cloudErrMsg=(e&&(e.message||e.error_description))||String(e);
     applyFacts([]);
@@ -2821,7 +2774,7 @@ async function initApp(){
   document.getElementById('labKey').innerHTML=ORDER.map(k=>`<option value="${k}">${META[k].n}</option>`).join('');
   await bootstrapData();
   // 图表库可能还在下载（首次约 1MB），先渲染不依赖图表的页面，避免整页空白
-  renderLogs(); renderRpt(); renderKSym(); renderKnow(); initImport(); renderCloud();
+  renderLogs(); renderRpt(); renderKSym(); renderKnow(); initImport();
   if(window.__echartsReady) await window.__echartsReady;
   renderHome();
 }
