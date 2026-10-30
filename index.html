@@ -1173,7 +1173,7 @@ const ALIAS={
   upro:['24h尿蛋白','24小时尿蛋白','尿蛋白定量','UTP'],
   k:['血钾','钾'],
   ca:['血钙','钙'],
-  p:['无机磷','血磷'],
+  p:['无机磷','血磷','磷'],
   pth:['甲状旁腺素','PTH'],
   hgb:['血红蛋白','HGB','血红'],
   alb:['白蛋白','ALB'],
@@ -1691,7 +1691,7 @@ function extractFromText(text, src){
    以前只挑「超出参考范围」的项目，正常项整张丢掉，报告没法回看。
    现在按「序号 + 项目名 + 结果 + 参考区间 + 单位」整行解析，
    报告里有多少项就入库多少项；异常项高亮，正常项默认折叠。 */
-const RANGE_RE=/([<>≤≥]?\s?\d+(?:\.\d+)?)\s*[-~～—−]\s*(\d+(?:\.\d+)?)/g;
+const RANGE_RE=/([<>≤≥]?\s?\d+(?:\.\d+)?)\s*[-–—−~～]{1,2}\s*(\d+(?:\.\d+)?)/g;
 const TOK_RE=/([<>≤≥]?\s?\d+(?:\.\d+)?)/g;
 
 /* 取出「独立数字」：排除 10^9/L、β2-MG、HITACHI 7600 这类粘连写法 */
@@ -1726,15 +1726,20 @@ function cleanItemName(s){
   // 名字前常粘着「L 17 」这类列残留：首个中文之前若有空格+数字，直接丢掉
   const ci=n.search(/[\u4e00-\u9fa5]/);
   if(ci>0&&ci<=8&&/^[A-Za-z]{1,2}\s+\d{1,2}\s*$/.test(n.slice(0,ci))) n=n.slice(ci).trim();
+  // 去掉左侧「代号」列：CO2-L / Cys C / eGFRcr 这类拉丁代号（数字开头的如 24h尿蛋白不动）
+  n=n.replace(/^[A-Za-z][A-Za-z0-9 .\-]{0,14}(?=[*△▲☆★]?[\u4e00-\u9fa5])/,'').replace(/^[*△▲☆★]+/,'').trim();
   // OCR 常把上一行的尾巴并进来，名字里出现小数就一定是串行噪声
   if(/\d+\.\d+/.test(n)) return '';
   // 括号不配平（"氯C1)"）时去掉多出来的右括号
   const l=(n.match(/[（(]/g)||[]).length, r=(n.match(/[）)]/g)||[]).length;
   if(r>l) n=n.replace(/[）)]\s*$/,'').trim();
-  if(n.length<2||n.length>30) return '';
+  if(n.length<1||n.length>30) return '';
   if(/[_|]/.test(n)) return '';                              // 化验项目名里不会有下划线/竖线
   if(n.length>=14&&(n.match(/ /g)||[]).length>=2&&/[a-z]{2,}/.test(n)) return ''; // 状态栏那类含小写单词的长串噪声
-  if(!/[\u4e00-\u9fa5]/.test(n)) return '';                  // 没有中文的多半是表头噪声
+    if(!/[\u4e00-\u9fa5]/.test(n)){
+      // 少数项目只用英文代号（eGFR / CREA / UA…），这类名也收
+      if(!/^(egfr|gfr|crea|cysc|urea|ua|pth|hgb|alb|tc|tg|ldl|chol)$/i.test(n.replace(/\s+/g,''))) return '';
+    }
   if(/项目|参考|结果|单位|检验|样本|姓名|报告|申请|检测|采集|接收|审核|实验室|声明|电话|地址|第.*页/.test(n)) return '';
   return n;
 }
@@ -1818,20 +1823,19 @@ function parseItemLine(body){
   if(rg){ lo=rg.a; hi=rg.b; st=val.v<lo?'low':val.v>hi?'high':'ok'; }
 
   let v=val.v, raw=0;
-  if(st!=='ok'&&rg){
+  // 原件自己标了 ↑↓ 就以它为准（各实验室参考区间不同，也可能数值在区间内仍标异常）；
+  // 有箭头时不做小数点修正，否则 2.81 会被误修成 0.281
+  const arrow=/([↑↓])/.exec(rg?body.slice(val.end,rg.start):body.slice(val.end));
+  if(arrow) st=arrow[0]==='↑'?'high':'low';
+  else if(st!=='ok'&&rg){
     const f=fixDecimal(v,lo,hi);
     if(f){ raw=v; v=f.v; st='ok'; }
   }
 
-  // 原件自己标了 ↑↓ 就以它为准（各实验室参考区间不同，可能数值在区间内却仍被标异常）
-  if(!raw){
-    const arrow=/[↑↓]/.exec(body.slice(val.start));
-    if(arrow) st=arrow[0]==='↑'?'high':'low';
-  }
-
   let unit='';
-  const after=rg?body.slice(rg.end):body.slice(val.end);
-  const um=after.match(/^\s*([A-Za-zμµ%][A-Za-z0-9μµ%\/\^\.]{0,11})/);
+  // 单位在「结果」和「参考范围」之间（如 263 ↑ umol/L 57--97），不能从区间后面找
+  const segU=rg?body.slice(val.end,rg.start):body.slice(val.end);
+  const um=segU.match(/^[^A-Za-zμµ%]*([A-Za-zμµ%][A-Za-z0-9μµ%\/\^\.]{0,11})/);
   if(um){
     const u=um[1].replace(/[.,;:\/]+$/,'');
     if(/\//.test(u)||/%/.test(u)||/^(fL|pg|mL|L|g|mg|U|IU|mmHg|s)$/.test(u)) unit=u;
@@ -1890,7 +1894,7 @@ function parseItems(text){
       const no=+m[1];
       if(no<1||no>80) continue;
       const it=parseItemLine(m[2]);
-      const hasRange=/\d\s*[-~～—−]\s*\d/.test(m[2]);
+      const hasRange=/[<>≤≥]?\s?\d+(?:\.\d+)?\s*[-–—−~～]{1,2}\s*\d/.test(m[2]);
       if(!it&&!hasRange) continue;                           // 不是化验项，编号也不计入
       seq.add(no);
       if(!it){ failed++; continue; }
@@ -1911,7 +1915,7 @@ function parseItems(text){
     const it=parseItemLine(line);
     if(!it||it.st==='unk') continue;                          // 没区间就分不清名字和数值，宁可不收
     const sig='x|'+it.n+'|'+(it.u||'');
-    if(it.n.length<3||names.has(sig)) continue;
+    if(names.has(sig)) continue;
     names.add(sig);
     items.push(it);
   }
