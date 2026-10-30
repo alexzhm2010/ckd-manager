@@ -41,6 +41,22 @@ function toText(c: any): string {
   return '';
 }
 
+/* 参考区间/单位统一成半角，前端好解析 */
+const normRef = (s: string) =>
+  String(s || '')
+    .replace(/[＜]/g, '<')
+    .replace(/[＞]/g, '>')
+    .replace(/[－—–]/g, '-')
+    .replace(/[～]/g, '~')
+    .replace(/[≤]/g, '<')
+    .replace(/[≥]/g, '>')
+    .replace(/\s+/g, '');
+const normUnit = (s: string) =>
+  String(s || '')
+    .replace(/\s+/g, '')
+    .replace(/l\.73/gi, '1.73')
+    .replace(/[μµ]/g, 'u');
+
 const isRange = (s: string) =>
   /^[<>≤≥]?\s*\d+(?:\.\d+)?\s*[-–—~～]{1,2}\s*\d+(?:\.\d+)?$/.test(s) || /^[<>≤≥]\s*\d+(?:\.\d+)?$/.test(s);
 const isNum = (s: string) =>
@@ -49,24 +65,91 @@ const isUnit = (s: string) => /^[A-Za-zμµ%][A-Za-z0-9μµ%\/\^\.\*]*$/.test(s)
 const isFlag = (s: string) => /^(?:[↑↓]|高|低|偏高|偏低|阳性|阴性|弱阳性|[+\-])$/.test(s);
 const isNoise = (s: string) => /项目|结果|单位|参考|提示|名称|代号|序号/.test(s);
 
-/* 一行 cells → 一个检验项（百度给的是单元格，不保证顺序，这里按“语义”挑列） */
-function rowToItem(cells: string[]) {
-  const c = cells.filter((x) => x && !isNoise(x));
-  if (!c.length) return null;
-  const ref = c.find(isRange) || '';
-  const val = c.find((x) => isNum(x) && !isRange(x)) || '';
-  const unit = c.find(isUnit) || '';
-  const flag = c.find(isFlag) || '';
-  const cand = c.filter((x) => /[\u4e00-\u9fa5]/.test(x) && !isRange(x) && !isUnit(x));
-  const name = (cand.sort((a, b) => b.length - a.length)[0] || '').replace(/[*△▲☆★]/g, '').trim();
-  if (!name || !val) return null;
-  return { name, result: val, unit, ref, flag };
+function cleanName(s: string): string {
+  return String(s || '')
+    .replace(/[*△▲☆★]/g, '')
+    .replace(/[↑↓]/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[|｜]+|[|｜]+$/g, '')
+    .replace(/[\s:：,，.。;；_-]+$/g, '')
+    .trim();
 }
 
-function pickDate(text: string): string {
-  const m = /(20\d{2})\s*[-年\/.]\s*(\d{1,2})\s*[-月\/.]\s*(\d{1,2})/.exec(text);
-  if (!m) return '';
-  return `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+/* ===== 百度医疗检验报告单识别的真实返回（已实测） =====
+   words_result.CommonData = [{word_name:'时间', word:'20261020'}, ...]
+   words_result.Item = [[{word_name:'项目名称',word:'白蛋白'},
+                          {word_name:'结果',word:'48.6'},
+                          {word_name:'单位',word:'g/L'},
+                          {word_name:'参考区间',word:'40.0--55.0'},
+                          {word_name:'结果提示',word:''},
+                          {word_name:'项目代号',word:''}], ...]
+   优先按 word_name 取名，字段缺失时才退回按“语义”猜列。 */
+const NAME_KEYS = ['项目名称', '项目', '名称', '检验项目', '项目名'];
+const RESULT_KEYS = ['结果', '检验结果', '检测结果', '数值'];
+const UNIT_KEYS = ['单位', '检验单位'];
+const REF_KEYS = ['参考区间', '参考范围', '参考值', '正常范围'];
+const FLAG_KEYS = ['结果提示', '提示', '异常提示', '异常'];
+const CODE_KEYS = ['项目代号', '代号', '英文缩写', '缩写'];
+
+function rowToItem(cells: any[]) {
+  const map: Record<string, string> = {};
+  const vals: string[] = [];
+  for (const c of cells) {
+    const wn = typeof c?.word_name === 'string' ? c.word_name.trim() : '';
+    const w = toText(c?.word != null ? c.word : c);
+    if (w) vals.push(w);
+    if (wn) map[wn] = w;
+  }
+  const pick = (keys: string[]) => keys.map((k) => map[k]).find((v) => v && v.length) || '';
+
+  let name = cleanName(pick(NAME_KEYS));
+  let result = pick(RESULT_KEYS);
+  let unit = normUnit(pick(UNIT_KEYS));
+  let ref = normRef(pick(REF_KEYS));
+  let flag = pick(FLAG_KEYS);
+  const code = pick(CODE_KEYS);
+
+  // 少量版式没有 word_name，按语义兜底
+  if (!name || !result) {
+    const rest = vals.filter((x) => x && !isNoise(x));
+    if (!ref) {
+      const r = rest.find(isRange);
+      if (r) ref = normRef(r);
+    }
+    if (!result) {
+      const v = rest.find((x) => isNum(x) && !isRange(x));
+      if (v) result = v;
+    }
+    if (!unit) {
+      const u = rest.find(isUnit);
+      if (u) unit = normUnit(u);
+    }
+    if (!flag) {
+      const f = rest.find(isFlag);
+      if (f) flag = f;
+    }
+    if (!name) {
+      const cn = rest.filter(
+        (x) => /[\u4e00-\u9fa5]/.test(x) && !isRange(x) && !isUnit(x) && x !== result && x !== ref,
+      );
+      cn.sort((a, b) => b.length - a.length);
+      name = cleanName(cn[0] || '');
+    }
+  }
+  if (!name || !result) return null; // 没有结果的行不是检验项
+  return { name, result, unit, ref, flag, code };
+}
+
+const pad2 = (n: string | number) => String(n).padStart(2, '0');
+function pickDate(s: string): string {
+  const t = String(s || '');
+  let m = /(20\d{2})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})/.exec(t);
+  if (m) return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
+  m = /(20\d{2})(\d{2})(\d{2})/.exec(t);
+  if (m && +m[2] >= 1 && +m[2] <= 12 && +m[3] >= 1 && +m[3] <= 31) {
+    return `${m[1]}-${m[2]}-${m[3]}`;
+  }
+  return '';
 }
 
 Deno.serve(async (req) => {
@@ -106,19 +189,26 @@ Deno.serve(async (req) => {
     const arr = wr.Item || wr.item || wr.items || [];
     const items: any[] = [];
     for (const it of arr) {
-      let cells: string[] = [];
-      if (Array.isArray(it)) cells = it.map(toText);
-      else if (it && typeof it === 'object') cells = Object.values(it).map(toText);
-      else cells = [toText(it)];
+      let cells: any[] = [];
+      if (Array.isArray(it)) cells = it;
+      else if (it && typeof it === 'object') cells = Object.values(it);
+      else cells = [it];
       const one = rowToItem(cells);
       if (one) items.push(one);
     }
 
-    // 日期：先从“通用信息”里找，再从各项文字里找
+    // 日期：先从「通用信息」里找（常见字段是 时间: 20261020），再从各项文字里找
     const common: string[] = [];
     const cd = wr.CommonData || wr.commonData || [];
-    for (const x of (Array.isArray(cd) ? cd : [cd])) common.push(toText(x));
-    const date = pickDate(common.join(' ') + ' ' + arr.map((x: any) => (Array.isArray(x) ? x.map(toText) : toText(x))).join(' '));
+    for (const x of (Array.isArray(cd) ? cd : [cd])) {
+      common.push(toText(x?.word != null ? x.word : x));
+    }
+    const date =
+      pickDate(common.join(' ')) ||
+      pickDate(
+        arr.map((x: any) => (Array.isArray(x) ? x.map((c: any) => toText(c?.word != null ? c.word : c)) : toText(x)))
+          .join(' '),
+      );
 
     return json({ items, date, provider: 'baidu-medical', total: items.length });
   } catch (e) {

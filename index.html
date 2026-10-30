@@ -1175,10 +1175,10 @@ const ALIAS={
   k:['血钾','钾'],
   ca:['血钙','钙'],
   p:['无机磷','血磷','磷'],
-  pth:['甲状旁腺素','PTH'],
+  pth:['甲状旁腺素','甲状旁腺激素','PTH'],
   hgb:['血红蛋白','HGB','血红'],
   alb:['白蛋白','ALB'],
-  hco3:['碳酸氢盐','CO2'],
+  hco3:['碳酸氢盐','二氧化碳结合力','CO2结合力','CO2'],
   tc:['总胆固醇','CHOL','TC'],
   tg:['甘油三酯','TG'],
   ldl:['低密度脂蛋白','LDL'],
@@ -1327,16 +1327,26 @@ async function cloudOcrAll(jobs,run){
   }
   return out;
 }
-/* 云端的 {name,result,unit,ref,flag} → 核对页用的项目结构 */
+/* 云端的 {name,result,unit,ref,flag,code} → 核对页用的项目结构 */
+function cleanUnit(u){
+  return String(u||'').replace(/\s+/g,'').replace(/l\.73/gi,'1.73').replace(/[μµ]/g,'u');
+}
 function cloudRowToItem(r){
-  const name=cleanItemName(r.name||'')||String(r.name||'').trim();
+  // 名称：先按前端规则清洗；读糊且带代号时用代号词典兜底
+  let name=cleanItemName(r.name||'');
+  if(!name) name=CODE_CN[String(r.code||'').toLowerCase().replace(/\s+/g,'')]||'';
+  if(!name) name=String(r.name||'').trim();
   if(!name) return null;
   const flag=/[↑↓]/.test(r.flag||'')?r.flag:'';
   const body=[name,r.result,flag,r.unit,r.ref].filter(Boolean).join(' ');
   const it=parseItemLine(body);
-  if(it){ if(it.st==='unk') it.st=''; return it; }
+  if(it){
+    if(it.st==='unk') it.st='';
+    if(r.unit) it.u=cleanUnit(r.unit);          // 百度给的单位更完整，不用再从文本里抠
+    return it;
+  }
   const num=parseFloat(String(r.result||'').replace(/[^\d.\-]/g,''));
-  return {n:name,v:isFinite(num)?num:String(r.result||''),u:r.unit||'',lo:null,hi:null,st:''};
+  return {n:name,v:isFinite(num)?num:String(r.result||''),u:cleanUnit(r.unit),lo:null,hi:null,st:''};
 }
 /* 云端结构化项 → 追踪指标（不再靠文本扫描，避免把 ALP 的 84 认成血磷） */
 function trackCloudItems(items,date,src){
@@ -1954,12 +1964,18 @@ function parseItemLine(body){
     rg={a,b,start:m.index,end:m.index+m[0].length};
   }
 
+  let singleRef='';
   if(!rg){
     // 单边参考范围：≤8 / <24 / ≥1 这类同样有效
     const sm=/[<≤]\s*(\d+(?:\.\d+)?)/.exec(body);
     const gm=/[>≥]\s*(\d+(?:\.\d+)?)/.exec(body);
-    if(sm) rg={a:0,b:parseFloat(sm[1]),start:sm.index,end:sm.index+sm[0].length,single:'hi'};
-    else if(gm) rg={a:parseFloat(gm[1]),b:1e7,start:gm.index,end:gm.index+gm[0].length,single:'lo'};
+    if(sm){
+      singleRef=body.slice(sm.index,sm.index+sm[0].length).replace(/\s/g,'');
+      rg={a:0,b:parseFloat(sm[1]),start:sm.index,end:sm.index+sm[0].length,single:'hi'};
+    }else if(gm){
+      singleRef=body.slice(gm.index,gm.index+gm[0].length).replace(/\s/g,'');
+      rg={a:parseFloat(gm[1]),b:1e7,start:gm.index,end:gm.index+gm[0].length,single:'lo'};
+    }
   }
 
   const q=qualValue(body);
@@ -1997,7 +2013,8 @@ function parseItemLine(body){
   // 有箭头时不做小数点修正，否则 2.81 会被误修成 0.281
   const arrow=/([↑↓])/.exec(rg?body.slice(val.end,rg.start):body.slice(val.end));
   if(arrow) st=arrow[0]==='↑'?'high':'low';
-  else if(st!=='ok'&&rg){
+  else if(st!=='ok'&&rg&&!rg.single){
+    // 单边范围（<5.17 / >90）不做小数点修正：1.94 对 <1.70 是真偏高，不是读成 0.194
     const f=fixDecimal(v,lo,hi);
     if(f){ raw=v; v=f.v; st='ok'; }
   }
@@ -2013,6 +2030,7 @@ function parseItemLine(body){
 
   const it={n:name,v,u:unit,lo,hi,st};
   if(raw) it.raw=raw;                                        // 只在修正过时记原值
+  if(singleRef) it.rf=singleRef;                              // 单边范围保留原件写法（<5.17 / >90）
   return it;
 }
 
@@ -2235,7 +2253,7 @@ function renderRpt(){
     const abn=isAbn(it);
     const col=abn?(it.st==='high'?'#d93a3a':'#0b6e99'):'#51606f';
     const mark=abn&&typeof it.v==='number'?(it.st==='high'?'↑':'↓'):'';   // 2+ / 阴性 不用再加箭头
-    const ref=abn&&it.lo!=null?`<span class="r">参考 ${it.lo}-${it.hi}</span>`:'';
+    const ref=abn&&refTxt(it)?`<span class="r">参考 ${refTxt(it)}</span>`:'';
     const fx=it.raw?`<span class="r" style="color:#c08a00" title="原件读数 ${it.raw}，按参考区间修正">≈</span>`:'';
     return `<div class="rpt-row${abn?'':' norm'}">
       <span class="n">${esc(it.n)}</span>
@@ -2518,12 +2536,21 @@ function restat(it){
   }
 }
 
+/* 参考范围展示：单边（<5.17 / >90）用原件写法，区间用 a-b */
+function refTxt(it){
+  if(!it) return '';
+  if(it.rf) return it.rf;
+  if(it.lo!=null&&it.hi!=null&&it.hi<1e7) return it.lo+'-'+it.hi;
+  return '';
+}
+
 function impRow(di,ii,it){
   const cls=it.st==='high'?' hi':(it.st==='low'?' lo':'');
-  const ref=(it.lo!=null&&it.hi!=null)?`<i>${it.lo}-${it.hi}</i>`:'';
+  const rt=refTxt(it);
+  const ref=rt?`<i>${rt}</i>`:'';
   const ck=META[canonOf(it)]?canonOf(it):'';
   return `<div class="ci-row${cls}${it._warn?' warn':''}" data-row="${di}_${ii}">
-    <span class="ci-n" title="${esc(it.n)} ${it.lo!=null?it.lo+'-'+it.hi:''}">${esc(it.n)}${ref}</span>
+    <span class="ci-n" title="${esc(it.n)} ${rt}">${esc(it.n)}${ref}</span>
     <input class="ci-in" data-k="${di}_${ii}" value="${esc(it.v)}" inputmode="decimal"
       onchange="impCommit(${di},${ii},this)"
       onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">
@@ -2846,7 +2873,7 @@ function confirmImport(){
     const d=g.date||'日期未识别';
     const cur=DB.rpt[d]=(DB.rpt[d]&&DB.rpt[d].items)?DB.rpt[d]:{items:[]};
     for(const it of g.items){
-      const save={n:it.n,v:it.v,u:it.u,lo:it.lo,hi:it.hi,st:it.st};
+      const save={n:it.n,v:it.v,u:it.u,lo:it.lo,hi:it.hi,st:it.st,rf:it.rf||''};
       if(it.raw!=null) save.raw=it.raw;      // 自动修正过的留痕
       if(it.cn&&META[it.cn]) save.cn=it.cn;  // 人工/别名认定的归属
       // 名称写法不同、但归属到同一指标时，更新已有那项，不另起一行
@@ -3070,7 +3097,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.3.0 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.3.1 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
