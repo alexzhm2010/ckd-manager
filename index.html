@@ -309,56 +309,8 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
 <!-- ============ 记录 ============ -->
 <section class="page" id="p-log">
   <div class="card">
-    <h2><span class="t"><span class="bar"></span>记录血压</span></h2>
-    <div class="row">
-      <div class="field"><label>收缩压 (mmHg)</label><input type="number" id="sbp" placeholder="如 128" inputmode="numeric"></div>
-      <div class="field"><label>舒张压 (mmHg)</label><input type="number" id="dbp" placeholder="如 78" inputmode="numeric"></div>
-      <div class="field"><label>心率 (次/分)</label><input type="number" id="hr" placeholder="选填" inputmode="numeric"></div>
-    </div>
-    <button class="btn" onclick="addBP()">保存血压记录</button>
-  </div>
-
-  <div class="card">
-    <h2><span class="t"><span class="bar"></span>记录饮水</span><span class="muted" id="waterToday"></span></h2>
-    <div class="row" style="align-items:end">
-      <div class="field" style="flex:2"><label>杯数（约 250ml/杯）</label><input type="number" id="cups" value="1" min="1" inputmode="numeric"></div>
-      <div class="field" style="flex:1"><button class="btn" onclick="addWater()">记录</button></div>
-    </div>
-    <div class="muted" style="font-size:12px">💡 CKD4期若出现水肿、气促需限制饮水；如无水肿，保持尿量充足即可</div>
-  </div>
-
-  <div class="card">
-    <h2><span class="t"><span class="bar"></span>记录体重</span></h2>
-    <div class="row" style="align-items:end">
-      <div class="field"><label>体重 (kg)</label><input type="number" id="wt" step="0.1" placeholder="如 68.5" inputmode="decimal"></div>
-      <div class="field"><label>是否有水肿</label>
-        <select id="edema"><option value="无">无</option><option value="轻度">轻度</option><option value="明显">明显</option></select>
-      </div>
-      <div class="field" style="flex:0 0 auto"><button class="btn" onclick="addWeight()">记录</button></div>
-    </div>
-    <div class="muted" style="font-size:12px">💡 短期内体重快速增加（如3天+2kg）常提示水潴留</div>
-  </div>
-
-  <div class="card">
-    <h2><span class="t"><span class="bar"></span>血钾预警自查</span></h2>
-    <div class="muted" style="margin-bottom:8px">最近血钾 <b id="lastK">5.03</b> mmol/L（偏高）。近期是否出现以下症状？</div>
-    <div id="kSym"></div>
-  </div>
-
-  <div class="card">
-    <h2><span class="t"><span class="bar"></span>症状/备注</span></h2>
-    <textarea id="noteTxt" placeholder="如：今天有点乏力、夜尿2次、泡沫尿明显…"></textarea>
-    <button class="btn ghost" style="margin-top:10px" onclick="addNote()">保存记录</button>
-  </div>
-
-  <div class="card">
     <h2><span class="t"><span class="bar"></span>化验报告（全部项目）</span><span class="muted" id="rptCount"></span></h2>
     <div id="rptList"></div>
-  </div>
-
-  <div class="card">
-    <h2><span class="t"><span class="bar"></span>近期记录</span><button class="btn sm ghost" onclick="renderLogs()">刷新</button></h2>
-    <div id="logList"></div>
   </div>
 </section>
 
@@ -598,7 +550,7 @@ const QUESTIONS=[
  '目前是否已到需要准备透析通路的阶段？预计时间窗？',
 ];
 
-const SYMPTOMS=['心慌/心悸','四肢无力或麻木','口唇发麻','明显水肿','尿量减少','恶心/食欲差','夜间气促'];
+
 
 const KNOW=[
  {t:'CKD 分期怎么看',c:'按 eGFR：1期≥90，2期60-89，3a期45-59，3b期30-44，4期15-29，5期&lt;15。你现在是4期（eGFR约24），重点目标是延缓进入5期。'},
@@ -1008,63 +960,6 @@ function toggleMed(k){
   save(); renderHome();
 }
 
-/* ==================== 记录 ==================== */
-function addBP(){
-  const s=+document.getElementById('sbp').value, dd=+document.getElementById('dbp').value, h=+document.getElementById('hr').value||null;
-  if(!s||!dd) return toast('请填写收缩压和舒张压');
-  if(s<60||s>260||dd<30||dd>180) return toast('数值异常，请检查');
-  DB.logs.unshift({type:'bp',date:today(),ts:Date.now(),sbp:s,dbp:dd,hr:h});
-  save(); document.getElementById('sbp').value='';document.getElementById('dbp').value='';document.getElementById('hr').value='';
-  renderLogs(); toast('血压已记录');
-  if(s>=140||dd>=90) setTimeout(()=>toast('⚠️ 血压偏高，注意休息并按时服药'),900);
-}
-function addWater(){
-  const raw=document.getElementById('cups').value.trim();
-  // 先解析用户输入再兜底，否则输入 0 会被 `||1` 悄悄改成 1 杯
-  const c=raw===''?1:+raw;
-  if(!isFinite(c)||c<1||c>30) return toast('杯数应在 1-30 之间');
-  DB.logs.unshift({type:'water',date:today(),ts:Date.now(),cups:c});
-  save(); renderLogs(); toast('饮水已记录');
-}
-function addWeight(){
-  const w=+document.getElementById('wt').value;
-  if(!w) return toast('请填写体重');
-  if(w<20||w>300) return toast('体重超出合理范围，请检查');
-  const e=document.getElementById('edema').value;
-  DB.logs.unshift({type:'weight',date:today(),ts:Date.now(),w:w,edema:e});
-  save(); document.getElementById('wt').value=''; renderLogs(); toast('体重已记录');
-}
-function addNote(){
-  const t=document.getElementById('noteTxt').value.trim();
-  if(!t) return toast('请填写内容');
-  DB.logs.unshift({type:'note',date:today(),ts:Date.now(),txt:t});
-  save(); document.getElementById('noteTxt').value=''; renderLogs(); toast('已保存');
-}
-let logLimit=20;                 // 近期记录默认 20 条，可继续加载更早的
-function moreLogs(){ logLimit+=20; renderLogs(); }
-function renderLogs(){
-  const el=document.getElementById('logList');
-  // 按日期倒序（同一天按写入时间倒序）：报告批量导入后写入顺序不等于时间顺序
-  const all=(DB.logs||[]).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))||((b.ts||0)-(a.ts||0)));
-  const arr=all.slice(0,logLimit);
-  if(!arr.length){ el.innerHTML='<div class="empty">还没有记录，从上面开始记录吧</div>'; return; }
-  el.innerHTML=arr.map(l=>{
-    let c='';
-    if(l.type==='bp'){ const hi=(l.sbp>=140||l.dbp>=90); c=`血压 <span class="bp ${hi?'hi':''}">${l.sbp}/${l.dbp}</span> mmHg${l.hr?' · 心率 '+l.hr:''}${hi?' <span class="badge" style="background:#fdeaea;color:#d93a3a">偏高</span>':''}`; }
-    if(l.type==='water') c=`饮水 ${l.cups} 杯`;
-    if(l.type==='weight') c=`体重 ${l.w} kg${l.edema&&l.edema!=='无'?' · 水肿：'+l.edema:''}`;
-    if(l.type==='note') c=esc(l.txt);
-    if(l.type==='lab') c=`${META[l.key]?META[l.key].n:l.key} = ${l.v}`;
-    return `<div class="list-item"><div class="dt">${dateStr(l.date)}</div><div>${c}</div></div>`;
-  }).join('')
-  + (all.length>logLimit
-      ? `<div style="text-align:center;margin-top:10px"><button class="mini" onclick="moreLogs()">显示更多（还有 ${all.length-logLimit} 条）</button></div>`
-      : '');
-  // 饮水统计
-  const w=DB.logs.filter(x=>x.type==='water'&&x.date===today()).reduce((s,x)=>s+x.cups,0);
-  document.getElementById('waterToday').textContent=`今日 ${w} 杯`;
-}
-
 /* ==================== 图表（多指标对比） ==================== */
 let chart=null;
 let selKeys=[];                 // 当前选中的对比指标（最多 6 项，决定左右轴归属）
@@ -1316,7 +1211,7 @@ function addLab(){
   DB.labs[d][k]=v;
   DB.logs.unshift({type:'lab',date:d,ts:Date.now(),key:k,v:v});
   save(); document.getElementById('labVal').value='';
-  drawChart(); renderLogs(); renderHome(); renderVisit(); toast('已添加');
+  drawChart(); renderHome(); renderVisit(); toast('已添加');
 }
 
 /* ==================== 报告导入（OCR） ==================== */
@@ -3190,7 +3085,7 @@ function confirmImport(){
   document.getElementById('impFile').value='';
   document.getElementById('impList').innerHTML='';
   document.getElementById('impState').textContent='';
-  drawChart(); renderLogs(); renderRpt(); renderHome(); renderVisit();
+  drawChart(); renderRpt(); renderHome(); renderVisit();
   toast(`已记录 ${msg.join('、')}`);
 }
 
@@ -3280,23 +3175,6 @@ function renderKnow(){
       <div style="font-weight:600;font-size:14px;margin-bottom:3px">${k.t}</div>
       <div class="muted" style="font-size:13px;line-height:1.65">${k.c}</div>
     </div>`).join('');
-}
-
-/* ==================== 血钾自查 ==================== */
-function renderKSym(){
-  document.getElementById('kSym').innerHTML=SYMPTOMS.map((s,i)=>`
-    <label style="display:flex;align-items:center;gap:8px;padding:7px 0;font-size:13.5px;cursor:pointer">
-      <input type="checkbox" style="width:17px;height:17px;accent-color:#1287b8" onchange="kCheck()" data-i="${i}">${s}
-    </label>`).join('')+
-    `<div id="kWarn" style="margin-top:8px"></div>`;
-}
-function kCheck(){
-  const boxes=[...document.querySelectorAll('#kSym input')];
-  const n=boxes.filter(b=>b.checked).length;
-  const el=document.getElementById('kWarn');
-  if(n>=2) el.innerHTML=`<div class="rem r"><span class="ic">🚨</span><div>勾选 ${n} 项症状，<b>建议今日尽快复查血钾或就医</b>。高钾可致心律失常，不要拖延。</div></div>`;
-  else if(n===1) el.innerHTML=`<div class="rem a"><span class="ic">⚠️</span><div>出现 1 项症状，留意观察。若加重或出现心慌，请立即就医查血钾。</div></div>`;
-  else el.innerHTML='';
 }
 
 /* ==================== 指标维护页 ==================== */
@@ -3490,7 +3368,7 @@ function go(p,el){
   if(p==='maint') renderMaint();
   if(p==='med') setTimeout(renderMed,30);
   if(p==='visit') renderVisit();
-  if(p==='log') renderLogs();
+  if(p==='log') renderRpt();
 }
 
 /* ==================== 登录 ==================== */
@@ -3564,7 +3442,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.5.2 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.5.3 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
@@ -3572,7 +3450,7 @@ async function initApp(){
   document.getElementById('labKey').innerHTML=ORDER.map(k=>`<option value="${k}">${META[k].n}</option>`).join('');
   await bootstrapData();
   // 图表库可能还在下载（首次约 1MB），先渲染不依赖图表的页面，避免整页空白
-  renderLogs(); renderRpt(); renderKSym(); renderKnow(); initImport();
+  renderRpt(); renderKnow(); initImport();
   if(window.__echartsReady) await window.__echartsReady;
   renderHome();
 }
