@@ -1861,7 +1861,14 @@ function parseItemLine(body){
     rg={a,b,start:m.index,end:m.index+m[0].length};
   }
 
-  // 定性结果优先：2+ / 阴性 这类没有数字，但同样是报告结论
+  if(!rg){
+    // 单边参考范围：≤8 / <24 / ≥1 这类同样有效
+    const sm=/[<≤]\s*(\d+(?:\.\d+)?)/.exec(body);
+    const gm=/[>≥]\s*(\d+(?:\.\d+)?)/.exec(body);
+    if(sm) rg={a:0,b:parseFloat(sm[1]),start:sm.index,end:sm.index+sm[0].length,single:'hi'};
+    else if(gm) rg={a:parseFloat(gm[1]),b:1e7,start:gm.index,end:gm.index+gm[0].length,single:'lo'};
+  }
+
   const q=qualValue(body);
   if(q){
     const name=cleanItemName(body.slice(0,q.at));
@@ -1946,47 +1953,87 @@ function splitSegs(line){
 }
 
 /* 整份报告 → {date, items, max, missing} */
-/* 按「列」解析一行：OCR 重排后列之间用 \t 分隔，适合代号/名称/结果/单位/参考范围的表格 */
+/* 医院化验单的通用项目代号：OCR 若把中文名读糊了，用代号兜底命名 */
+const CODE_CN={
+  alt:'谷丙转氨酶',ast:'谷草转氨酶',ggt:'谷氨酰转肽酶',alp:'碱性磷酸酶',tba:'总胆汁酸',
+  tp:'总蛋白',pa:'前白蛋白',alb:'白蛋白',che:'胆碱酯酶',ldh:'乳酸脱氢酶',
+  tbil:'总胆红素',dbil:'直接胆红素',ibil:'间接胆红素',ck:'肌酸激酶','ck-mb':'肌酸激酶同工酶',
+  hbdh:'羟丁酸脱氢酶','co2-l':'血清碳酸氢盐',ada:'腺苷脱氨酶',chol:'总胆固醇',tg:'甘油三酯',
+  'hdl-c':'高密度脂蛋白','ldl-c':'低密度脂蛋白','apo-a1':'载脂蛋白A1','apo-b':'载脂蛋白B',
+  lpa2:'脂蛋白(a)','cys c':'胱抑素C',cysc:'胱抑素C',urea:'尿素',crea:'肌酐',ua:'尿酸',
+  glu:'葡萄糖',k:'钾',na:'钠',cl:'氯',ca:'钙',p:'磷',mg:'镁',glob:'球蛋白',
+  'a/g':'白蛋白与球蛋白比值',egfrcr:'估算肾小球滤过率',egfr:'估算肾小球滤过率'
+};
+
+/* 按「列」解析一行：OCR 重排后列之间用 \t 分隔，适合代号/名称/结果/单位/参考范围的表格。
+   一行里可能并排着左右两个半栏，遇到第二个「代号」就开始新记录。 */
 function parseRowCells(line){
   const cells=line.split(/\t+/).map(s=>s.trim()).filter(Boolean);
   if(cells.length<3) return [];
+  const isCode=c=>/^[A-Za-z][A-Za-z0-9 .\-\/]{0,14}$/.test(c)
+      &&!/\d{2,}/.test(c)
+      &&!/^(?:ml|mmol|umol|μmol|mg|g|kg|l|dl|ul|u|iu|min|s|mm|cm|mmhg|fl|pg|%|u\/l|iu\/l|mmol\/l|umol\/l|mg\/l|mg\/dl|g\/l|ml\/min)$/i.test(c.replace(/\s/g,''));
+  const groups=[]; let cur=[];
+  for(const c of cells){
+    if(isCode(c)&&cur.some(x=>/\d/.test(x))){ groups.push(cur); cur=[]; }
+    cur.push(c);
+  }
+  if(cur.length) groups.push(cur);
+
   const out=[];
-  for(let i=0;i<cells.length;i++){
-    RANGE_RE.lastIndex=0;
-    if(!RANGE_RE.test(cells[i])) continue;
-    // 结果列：区间左侧最近的纯数字单元格
+  for(const g of groups){
+    // 结果：第一个「含数字、无中文、非区间、非上下限」的单元格
     let vi=-1;
-    for(let j=i-1;j>=0;j--){
-      const c=cells[j];
+    for(let i=0;i<g.length;i++){
+      const c=g[i];
       if(!/\d/.test(c)||/[\u4e00-\u9fa5]/.test(c)) continue;
-      RANGE_RE.lastIndex=0; if(RANGE_RE.test(c)) continue;
-      vi=j; break;
+      RANGE_RE.lastIndex=0;
+      if(RANGE_RE.test(c)||/^[<>≤≥]/.test(c)) continue;
+      vi=i; break;
     }
     if(vi<0) continue;
-    const tk=numTokens(cells[vi])[0];
+    const tk=numTokens(g[vi])[0];
     if(!tk) continue;
-    const arrow=(/[↑↓]/.exec(cells[vi])||[])[0]||'';
-    // 名称列：结果左侧最近的「含中文或已知英文代号」单元格
-    let ni=-1;
-    for(let j=vi-1;j>=0;j--){
-      const c=cells[j];
-      RANGE_RE.lastIndex=0;
-      if(!c||RANGE_RE.test(c)) continue;
-      if(!/[\u4e00-\u9fa5]/.test(c)&&!/^(egfr|crea|ua|urea|cysc|pth|hgb|alb|tc|tg|ldl)$/i.test(c.replace(/\s+/g,''))) continue;
-      ni=j; break;
-    }
-    if(ni<0) continue;
-    // 单位：优先取结果单元格里数字后面的字母（如 "23.04 ml/min"），否则看结果与区间之间的列
-    let unitCell='';
-    const rest=cells[vi].slice(tk.end).trim();
+    const arrow=(/[↑↓]/.exec(g[vi])||[])[0]||((g[vi+1]&&/^[↑↓]$/.test(g[vi+1].trim()))?g[vi+1].trim():'');
+    // 单位：结果单元格里数字后面的字母，否则看结果右侧的列
+    let unit='';
+    const rest=g[vi].slice(tk.end).trim();
     const rm=rest.match(/[A-Za-zμµ%][A-Za-z0-9μµ%\/\^\.]*/);
-    if(rm) unitCell=rm[0];
-    else{
-      for(let j=vi+1;j<i;j++){ if(/[A-Za-zμµ%]/.test(cells[j])){ unitCell=cells[j]; break; } }
+    if(rm) unit=rm[0];
+    if(!unit) for(let j=vi+1;j<g.length;j++){
+      const c=g[j]; RANGE_RE.lastIndex=0;
+      if(/[A-Za-zμµ%]/.test(c)&&!RANGE_RE.test(c)&&!/^[<>≤≥]/.test(c)){ unit=c; break; }
     }
-    const body=cells[ni]+' '+arrow+tk.v+' '+unitCell+' '+cells[i];
+    // 名称：结果左侧最近的可用单元格；中文读糊时用代号兜底
+    let nm='',code=(g.slice(0,vi).find(isCode)||'');
+    for(let j=vi-1;j>=0;j--){
+      const c=g[j]; RANGE_RE.lastIndex=0;
+      if(!c||RANGE_RE.test(c)) continue;
+      const cr=cleanItemName(c);
+      if(cr){ nm=cr; break; }
+    }
+    if(!nm&&code){
+      const cn=CODE_CN[code.toLowerCase().replace(/\s+/g,'')]||CODE_CN[code.toLowerCase()];
+      nm=cn||code;
+    }
+    // 中文名读糊（如"回和"）且不是已知指标时，用代号对应的标准名兜底
+    if(code&&nm){
+      const cn=CODE_CN[code.toLowerCase().replace(/\s+/g,'')]||CODE_CN[code.toLowerCase()];
+      if(cn&&!keyOfName(nm)&&nm!==cn) nm=cn;
+    }
+    if(!nm) continue;
+    // 参考范围：只看最后一列，且排除「危险人群目标值」这类长文本
+    let ref='';
+    for(let j=g.length-1;j>vi;j--){
+      const c=g[j];
+      if(/目标|人群|危险|建议|详见/.test(c)||c.length>28) continue;
+      RANGE_RE.lastIndex=0;
+      if(RANGE_RE.test(c)||/[<>≤≥]\s*\d/.test(c)){ ref=c; break; }
+    }
+    const body=nm+' '+tk.v+' '+arrow+' '+unit+' '+ref;
     const it=parseItemLine(body);
-    if(it&&it.st!=='unk') out.push(it);
+    if(it){ if(it.st==='unk') it.st=''; out.push(it); }
+    else out.push({n:nm,v:tk.v,u:unit,lo:null,hi:null,st:''});   // 没有参考范围也保留这一项
   }
   return out;
 }
@@ -2000,16 +2047,20 @@ function parseItems(text){
   let failed=0;                                              // 有参考区间却没解析出来的行
 
   for(const raw of lines){
-    const line=raw.trim();
+    let line=raw.trim();
     if(line.length<4) continue;
     // 有列分隔（OCR 重排结果）：按单元格解析，避免名称与代号/单位粘连
     if(/\t/.test(line)){
-      for(const it of parseRowCells(line)){
-        const sig='c|'+it.n+'|'+(it.u||'');
-        if(names.has(sig)) continue;
-        names.add(sig); items.push(it);
+      const cis=parseRowCells(line);
+      if(cis.length){
+        for(const it of cis){
+          const sig='c|'+it.n+'|'+(it.u||'');
+          if(names.has(sig)) continue;
+          names.add(sig); items.push(it);
+        }
+        continue;
       }
-      continue;
+      line=line.replace(/\t+/g,' ');   // 列切分失败时退回整行解析
     }
     for(const seg of splitSegs(line)){
       if(/^\d{1,2}:\d{2}/.test(seg)) continue;               // 04:30 这种是截图里的时间，不是序号
@@ -2926,7 +2977,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.1.1 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.2.0 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
