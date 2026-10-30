@@ -226,6 +226,17 @@ Deno.serve(async (req) => {
       specimen: pickc(['标本种类', '标本类型', '标本']),
       title: pickc(['报告单名称', '检查项目', '检验项目']),
     };
+    // 版式里医院字段没被提取出来时，从通用信息的整段文字里兜底找「XX医院 / XX内科」
+    const blob = common.join(' ');
+    if (!info.hospital) {
+      const m = /([\u4e00-\u9fa5]{2,20}(?:医院|保健院|卫生院|医疗中心|医学中心|附属医院))/.exec(blob);
+      if (m) info.hospital = m[1];
+    }
+    if (!info.dept) {
+      const m = /([\u4e00-\u9fa5]{2,6}(?:内科|外科|病区|门诊|科室))/.exec(blob);
+      if (m) info.dept = m[1];
+    }
+    if (!info.title && info.hospital) info.title = info.hospital + '检验报告单';
 
     return json({ items, date, common: info, provider: 'baidu-medical', total: items.length });
   } catch (e) {
