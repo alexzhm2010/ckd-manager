@@ -1281,6 +1281,74 @@ function loadScript(src){
   });
 }
 
+/* ---------- 云端化验单识别（Supabase Edge Function 代理百度接口） ---------- */
+async function cloudSessionToken(){
+  try{
+    const sb=await getSupabase();
+    const s=await sb.auth.getSession();
+    return (s&&s.data&&s.data.session&&s.data.session.access_token)||'';
+  }catch(e){ return ''; }
+}
+async function callCloudOcr(dataUrl){
+  const token=await cloudSessionToken();
+  if(!token) throw new Error('未登录');
+  const r=await fetch(CLOUD.url+'/functions/v1/ocr-report',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,'apikey':CLOUD.anonKey},
+    body:JSON.stringify({image:dataUrl})
+  });
+  const j=await r.json().catch(()=>({error:'返回不是 JSON'}));
+  if(!r.ok||j.error) throw new Error(j.error||('HTTP '+r.status));
+  return j;
+}
+/* 逐页调用云端；任何一页失败都整体退回本地 OCR，避免半套结果 */
+async function cloudOcrAll(jobs,run){
+  if(!CLOUD||!CLOUD.url) return null;
+  if(!(await cloudSessionToken())) return null;
+  const out=[];
+  try{
+    for(const job of jobs){
+      let text='', items=[], date='';
+      for(const pg of job.pages){
+        if(run!==impRunId) return null;
+        if(pg.text){ text+='\n'+pg.text; continue; }
+        const im=pg.full||(pg.imgs||[])[0];
+        if(!im) return null;
+        impProgress('云端识别化验单…',30);
+        const j=await callCloudOcr(im);
+        if(j.items&&j.items.length) items=items.concat(j.items);
+        if(j.date) date=j.date;
+        if(j.text) text+='\n'+j.text;
+      }
+      out.push({date,text,items});
+    }
+  }catch(e){
+    return null;                                  // 没配密钥/额度用完/网络问题 → 本地兜底
+  }
+  return out;
+}
+/* 云端的 {name,result,unit,ref,flag} → 核对页用的项目结构 */
+function cloudRowToItem(r){
+  const name=cleanItemName(r.name||'')||String(r.name||'').trim();
+  if(!name) return null;
+  const flag=/[↑↓]/.test(r.flag||'')?r.flag:'';
+  const body=[name,r.result,flag,r.unit,r.ref].filter(Boolean).join(' ');
+  const it=parseItemLine(body);
+  if(it){ if(it.st==='unk') it.st=''; return it; }
+  const num=parseFloat(String(r.result||'').replace(/[^\d.\-]/g,''));
+  return {n:name,v:isFinite(num)?num:String(r.result||''),u:r.unit||'',lo:null,hi:null,st:''};
+}
+/* 云端结构化项 → 追踪指标（不再靠文本扫描，避免把 ALP 的 84 认成血磷） */
+function trackCloudItems(items,date,src){
+  if(!date) return;
+  for(const it of items){
+    const k=keyOfName(it.n);
+    if(!k||typeof it.v!=='number'||!isFinite(it.v)) continue;
+    if(impParsed.some(p=>p.date===date&&p.key===k)) continue;
+    impParsed.push({date,key:k,v:it.v,src});
+  }
+}
+
 /* ---------- 核心：解析报告 ---------- */
 async function parseReports(){
   // 每次解析分配一个编号；用户中途重选文件时，旧任务会自行退出并释放 worker
@@ -1327,7 +1395,14 @@ async function parseReports(){
     }
     const needOcr=jobs.some(j=>j.pages.some(p=>p.imgs&&p.imgs.length));
 
+    // 优先走云端化验单识别（结构化、准确率高）；未配置/失败时自动退回本地 OCR
+    let cRes=null;
     if(needOcr){
+      cRes=await cloudOcrAll(jobs,run);
+      if(!cRes&&run===impRunId) toast('云端识别不可用，已回退本地识别');
+    }
+
+    if(needOcr&&!cRes){
       impProgress('准备识别引擎…',8);
       // worker(blob URL) 内相对路径会失效，全部转绝对路径
       const LOCAL=new URL('vendor/', location.href).href;
@@ -1379,6 +1454,23 @@ async function parseReports(){
       }
       const job=jobs[idx];
       impProgress(`识别第 ${idx+1}/${jobs.length} 个文件：${job.name}`, 10+Math.round(idx/jobs.length*20));
+      // 云端已给出结构化结果：直接入库，不再做文本解析（避免同一份报告出现两套行）
+      const cr=cRes&&cRes[idx];
+      if(cr){
+        const items=(cr.items||[]).map(cloudRowToItem).filter(Boolean);
+        const dt=cr.date||findDate(cr.text||'')||today();
+        if(cr.text) impTextAll+=(impTextAll?'\n\n':'')+cr.text;
+        if(items.length){
+          impRpt.push({date:dt,src:job.name+'（云端）',items,max:0,missing:0});
+          trackCloudItems(items,dt,job.name);
+        }else if(cr.text){
+          extractFromText(cr.text,job.name);
+          const pr=parseItems(cr.text); pr.date=dt; pr.src=job.name;
+          if(pr.items.length) impRpt.push(pr);
+          impOrphan+=countOrphanArrows(cr.text);
+        }
+        continue;
+      }
       let fullText='';
       for(let i=0;i<job.pages.length;i++){
         const pg=job.pages[i];
@@ -1583,8 +1675,9 @@ async function fileToImages(file){
         cx.fillStyle='#fff'; cx.fillRect(0,0,c.width,c.height);
         cx.drawImage(im,0,0,c.width,c.height);
         const imgs=pageToImgs(c);
+        const full=c.toDataURL('image/jpeg',0.85);   // 云端识别用整页（不切栏），保留表格结构
         c.width=0; c.height=0;                  // 大图已转成 dataURL，画布可以释放了
-        res({imgs});
+        res({imgs,full});
       };
       im.onerror=()=>res({imgs:[url]});
       im.src=url;
@@ -1605,7 +1698,7 @@ async function fileToImages(file){
     const ctx=canvas.getContext('2d');
     ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
     await page.render({canvasContext:ctx,viewport:vp}).promise;
-    out.push({imgs:pageToImgs(canvas)});
+    out.push({imgs:pageToImgs(canvas),full:canvas.toDataURL('image/jpeg',0.85)});
     canvas.width=0; canvas.height=0;          // 逐页释放，30 页扫描件不至于吃光内存
   }
   return out;
@@ -2977,7 +3070,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.2.0 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.3.0 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
