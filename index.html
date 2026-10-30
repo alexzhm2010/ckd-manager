@@ -149,8 +149,11 @@ body.with-impbar .toast{bottom:calc(170px + env(safe-area-inset-bottom))}
 .ci-row{display:flex;align-items:center;gap:4px;font-size:12.5px;padding:2px;
 border-bottom:1px dotted #eceff3}
 .ci-row:hover{background:#fafcfe}
-.ci-n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#3d4b59}
-.ci-n i{font-style:normal;color:#c2ccd6;font-size:10px;margin-left:5px}
+.ci-n{flex:1;min-width:0;display:flex;align-items:center;gap:4px;color:#3d4b59}
+.ci-name{flex:1;min-width:0;width:100%;border:none;border-bottom:1px dashed transparent;background:transparent;
+font-family:inherit;font-size:12.5px;color:#3d4b59;padding:0 1px 1px;outline:none;border-radius:0}
+.ci-name:focus{border-bottom-color:var(--pri2);background:#eef5fd}
+.ci-n i{font-style:normal;color:#c2ccd6;font-size:10px;margin-left:5px;flex:0 0 auto}
 .ci-in{width:54px;text-align:right;border:none;border-bottom:1px dashed #d3dce5;background:transparent;
 font-family:inherit;font-size:12.5px;font-weight:700;color:#3d4b59;padding:0 1px 1px;outline:none;
 border-radius:0;flex:0 0 auto}
@@ -473,7 +476,7 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
 const KEY='kidney_mgr_v1';
 let FACTS_READY=false;      // 等下面的表结构和 META 都就绪后，save 才写 facts
 const DEFAULT={
-  logs:[], meds:{}, visits:[], labs:{}, syms:{}, abn:{}, rpt:{}
+  logs:[], meds:{}, visits:[], labs:{}, syms:{}, abn:{}, rpt:{}, metrics:{}
 };
 /* 数据只存云端：启动时从 facts 表拉取，浏览器里不保留任何数据 */
 function load(){ return JSON.parse(JSON.stringify(DEFAULT)); }
@@ -602,7 +605,7 @@ function deriveFacts(db,touch){
     return touch?now:(prev.updated_at||1);
   };
 
-  [['logs',db.logs||[]],['meds',db.meds||{}],['visits',db.visits||[]],['syms',db.syms||{}]].forEach(([k,v])=>{
+  [['logs',db.logs||[]],['meds',db.meds||{}],['visits',db.visits||[]],['syms',db.syms||{}],['metrics',db.metrics||{}]].forEach(([k,v])=>{
     const uid='block|'+k;
     const prev=FACTMAP.get(uid);
     const changed=!prev||JSON.stringify((prev.meta||{}).data)!==JSON.stringify(v);
@@ -683,6 +686,10 @@ function deriveFacts(db,touch){
 function applyFacts(rows){
   FACTS=rows.slice();
   FACTMAP=new Map(rows.filter(r=>r&&r.uid).map(r=>[r.uid,r]));
+  // 先把自定义指标登记进 META/ORDER，再解析别名和报告，
+  // 否则指向自定义指标的 canon 会在加载时被判成无效
+  const mrow=rows.filter(r=>r&&r.kind==='block'&&r.key==='metrics').pop();
+  if(mrow&&mrow.meta&&mrow.meta.data) registerMetrics(mrow.meta.data);
   buildCanonMap(rows);
   const db=blankDb();
   const rptBox={}, metaBox={};
@@ -852,6 +859,7 @@ function last(key){
 }
 function statusOf(key,v){
   const m=META[key]; if(!m) return 'ok';
+  if(!m.ref||m.ref.length<2) return 'ok';   // 自定义指标没读到参考区间时不做判定
   if(m.dir==='low') return v>m.ref[1]?'bad':'ok';
   if(m.dir==='high') return v<m.ref[0]?'bad':'ok';
   return (v<m.ref[0]||v>m.ref[1])?'bad':'ok';
@@ -1070,7 +1078,7 @@ function drawChart(){
         }}
     };
     if(useDual) s.yAxisIndex=i;             // 左0 右1
-    if(!useNorm && !multi){                  // 单指标才画参考线
+    if(!useNorm && !multi && m.ref && m.ref.length===2){   // 单指标才画参考线
       s.markLine={silent:true,symbol:'none',data:[
         {yAxis:m.ref[0],lineStyle:{color:'#7fc9a0',type:'dashed',width:1.2},label:{formatter:'下限 '+m.ref[0],fontSize:9,color:'#7fc9a0'}},
         {yAxis:m.ref[1],lineStyle:{color:'#e5a3a3',type:'dashed',width:1.2},label:{formatter:'上限 '+m.ref[1],fontSize:9,color:'#e5a3a3'}}
@@ -2405,11 +2413,29 @@ const aliasKey=n=>String(normName(n)||'').toLowerCase();
 function buildCanonMap(rows){
   CANONMAP=new Map();
   (rows||[]).forEach(r=>{
-    if(!r||r.kind!=='alias'||!r.key||!META[r.key]) return;
+    if(!r||r.kind!=='alias'||!r.name) return;
     const a=aliasKey(r.name||'');
-    if(a) CANONMAP.set(a,r.key);
+    if(!a) return;
+    if(r.key&&META[r.key]) CANONMAP.set(a,r.key);
+    // 负别名（key 为空 + meta.neg）：这个名字明确「未归类」，不再按静态别名表自动归类
+    else if(r.meta&&r.meta.neg) CANONMAP.set(a,'');
   });
 }
+/* 自定义归类指标：写进 META/ORDER，之后和内置指标一样参与趋势、记录、提醒 */
+const customKey=n=>'x_'+normName(n).slice(0,24);
+function registerMetrics(obj){
+  const src=obj||{};
+  Object.keys(src).forEach(k=>{
+    if(!k||META[k]) return;
+    const m=src[k]||{};
+    META[k]={n:m.n||k,u:m.u||'',ref:Array.isArray(m.ref)&&m.ref.length===2?m.ref:null,
+      goal:m.goal||'',dir:m.dir||'range',custom:true};
+    if(ORDER.indexOf(k)<0) ORDER.push(k);
+  });
+}
+function registerMetric(k,m){ const o={}; o[k]=m; registerMetrics(o); }
+/* 这个名字是否被用户明确设为「未归类」 */
+const isNegAlias=n=>{ const a=aliasKey(n); return !!a&&CANONMAP.has(a)&&!CANONMAP.get(a); };
 /* 写法 → 规范指标 key：先查学到的别名，再用静态别名表兜底 */
 function resolveCanon(n){
   const nm=aliasKey(n);
@@ -2424,31 +2450,32 @@ const canonOf=x=>{
   return resolveCanon(x.n)||normName(x.n);
 };
 /* 学习一条别名，并把档案里已有的同名报告项改成新归属（老数据立刻归并）。
-   key 传 null 表示取消归属 */
+   key 传 null 表示「明确不归类」：记住这个写法，下次导入仍显示未归类 */
 function learnAlias(name,key){
   const a=aliasKey(name);
   if(!a) return;
   const uid='alias|'+a;
   const prev=FACTMAP.get(uid)||null;
   const want=key&&META[key]?key:null;
+  const neg=key===null;
   let touched=0, changed=false;
 
   Object.keys(DB.rpt||{}).forEach(d=>{
     (rptItems(d)||[]).forEach(it=>{
       if(aliasKey(it.n)!==a) return;
-      if(want){ if(it.cn!==want){ it.cn=want; touched++; } }
+      if(want){ if(it.cn!==want){ it.cn=want; delete it._nc; touched++; } }
       else if(it.cn){ delete it.cn; touched++; }
     });
   });
 
-  if(want&&(!prev||prev.key!==want)){
-    const row={uid,kind:'alias',key:want,name:String(name||'').trim(),value:null,
-      meta:{},source:'manual',created_at:prev?prev.created_at:Date.now(),updated_at:Date.now()};
+  if(want||neg){
+    const row={uid,kind:'alias',key:want||'',name:String(name||'').trim(),value:null,
+      meta:{neg:neg?true:false},source:'manual',created_at:prev?prev.created_at:Date.now(),updated_at:Date.now()};
     FACTS=FACTS.filter(r=>r.uid!==uid).concat(row);
-    FACTMAP.set(uid,row); CANONMAP.set(a,want);
+    FACTMAP.set(uid,row); CANONMAP.set(a,want||'');
     queueCloudSync([row],[]);
     changed=true;
-  }else if(!want&&prev){
+  }else if(prev){
     FACTS=FACTS.filter(r=>r.uid!==uid);
     FACTMAP.delete(uid); CANONMAP.delete(a);
     queueCloudSync([],[uid]);
@@ -2583,9 +2610,14 @@ function impRow(di,ii,it){
   const cls=it.st==='high'?' hi':(it.st==='low'?' lo':'');
   const rt=refTxt(it);
   const ref=rt?`<i>${rt}</i>`:'';
-  const ck=META[canonOf(it)]?canonOf(it):'';
+  const k=canonOf(it);
+  const ck=META[k]?k:'';
   return `<div class="ci-row${cls}${it._warn?' warn':''}" data-row="${di}_${ii}">
-    <span class="ci-n" title="${esc(it.n)} ${rt}">${esc(it.n)}${ref}</span>
+    <span class="ci-n" title="${esc(it.n)} ${rt}">
+      <input class="ci-name" data-n="${di}_${ii}" value="${esc(it.n)}"
+        onchange="impRename(${di},${ii},this)"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">${ref}
+    </span>
     <input class="ci-in" data-k="${di}_${ii}" value="${esc(it.v)}" inputmode="decimal"
       onchange="impCommit(${di},${ii},this)"
       onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">
@@ -2593,11 +2625,28 @@ function impRow(di,ii,it){
     <select class="ci-c${ck?' set':''}" onchange="impAssign(${di},${ii},this.value)"
       title="这项算档案里的哪个指标（写法不同也能归到一起）">
       <option value="">未归类</option>
-      ${ORDER.map(k=>`<option value="${k}"${ck===k?' selected':''}>${SHORT[k]||META[k].n}</option>`).join('')}
+      ${ORDER.map(o=>`<option value="${o}"${ck===o?' selected':''}>${SHORT[o]||META[o].n}</option>`).join('')}
+      <option value="__custom">＋自定义…</option>
     </select>
     <button class="ci-ok${it._ok?' on':''}" data-ok="${di}_${ii}" onclick="impMark(${di},${ii})"
-      title="${it._ok?'已核对，点击取消':'标记为与原件一致'}">${it._ok?'✓':'○'}</button>
+      title="${it._ok?'已勾选，点击取消':'勾选后才导入这一行'}">${it._ok?'✓':'○'}</button>
   </div>`;
+}
+
+/* 改指标名：改完按新名字重新判定归类（人工指定的归属会被清掉） */
+function impRename(di,ii,el){
+  const g=groupImp()[di];
+  if(!g||!g.items[ii]) return;
+  const it=g.items[ii];
+  const v=String(el.value||'').trim();
+  if(!v){ el.value=it.n; return; }
+  if(v!==it.n){
+    it.n=v;
+    delete it.cn; delete it._auto; delete it._custom; delete it._nc;
+  }
+  const y=window.scrollY;
+  renderImpResult();
+  window.scrollTo(0,y);
 }
 
 function impPaint(di,ii,it){
@@ -2631,23 +2680,52 @@ function impCommit(di,ii,el){
   // 手改后也做一次合理性检查：5.2 误输成 52 这类要能看出来
   const k=canonOf(it);
   it._warn=!!(k&&META[k]&&typeof it.v==='number'&&impSuspect({key:k,v:it.v}));
+  autoTrack(it);                   // 改完可能从「异常」变成「正常」，跟踪状态跟着变
   el.value=it.v;
   impPaint(di,ii,it); impCheckProgress();
 }
 
+/* 标红的异常项自动纳入日常跟踪：没有归类就给它建一个自定义指标
+   用户明确选了「未归类」的（_nc 或负别名）不再自动加 */
+function autoTrack(it){
+  if(it._nc){ if(it._auto){ delete it.cn; delete it._auto; } return; }
+  if(!isAbn(it)){ if(it._auto){ delete it.cn; delete it._auto; } return; }
+  if(META[canonOf(it)]) return;
+  if(isNegAlias(it.n)) return;
+  const k=customKey(it.n);
+  registerMetric(k,{n:it.n,u:it.u||'',
+    ref:(it.lo!=null&&it.hi!=null)?[it.lo,it.hi]:null,dir:'range'});
+  it.cn=k; it._auto=true;
+}
+
 /* 核对时指定归属指标：写回该行，并把这个写法记成别名（下次自动认）
-   key 为空表示「未归类」，会撤销之前学到的别名 */
+   key 为空表示「未归类」，会记住这个写法，下次导入仍显示未归类
+   key 为 __custom 时让用户输入自定义归类名称，并加入日常追踪指标 */
 function impAssign(di,ii,key){
   const g=groupImp()[di];
   if(!g||!g.items[ii]) return;
   const it=g.items[ii];
-  const want=key&&META[key]?key:null;
+  let k=key;
+  if(k==='__custom'){
+    const nm=String(prompt('自定义归类名称（会加入日常追踪指标，可随时在指标页选择）',it.n)||'').trim();
+    if(!nm){ renderImpResult(); return; }
+    k=customKey(nm);
+    const m={n:nm,u:it.u||'',ref:(it.lo!=null&&it.hi!=null)?[it.lo,it.hi]:null,dir:'range'};
+    registerMetric(k,m);
+    // 立刻持久化，保证这个指标和以后学到的别名都能落到它
+    DB.metrics=DB.metrics||{};
+    DB.metrics[k]=m;
+  }
+  const want=k&&META[k]?k:null;
   const y=window.scrollY;
-  if(want) it.cn=want; else delete it.cn;
+  if(want){ it.cn=want; delete it._nc; } else { delete it.cn; it._nc=true; }
+  it._custom=!!(want&&META[want].custom);
+  delete it._auto;               // 人工指定后不再算「自动纳入」
   learnAlias(it.n,want);
+  if(want&&META[want].custom) save();
   renderImpResult();
   window.scrollTo(0,y);
-  toast(want?`「${it.n}」已归到 ${META[want].n}，以后自动记住`:`「${it.n}」已取消归属`);
+  toast(want?`「${it.n}」已归到 ${META[want].n}，以后自动记住`:`「${it.n}」已设为未归类，以后也保持未归类`);
 }
 
 function impMark(di,ii){
@@ -2687,19 +2765,16 @@ function impStat(){
   return {total,done};
 }
 
-/* 本次核对后真正会进趋势图的项：以核对表里的归属（含手改）为准，
-   再加上别名匹配到、但逐项解析没整理出来的指标 */
-function impTracked(groups,parsed){
+/* 本次核对后真正会进趋势图的项：以核对表里的归属（含手改）为准。
+   只统计传进来的 groups（导入时传的是「已勾选」的项） */
+function impTracked(groups){
   const m=new Map();
-  (groups||groupImp()).forEach(g=>{
+  (groups||[]).forEach(g=>{
     if(!g.date) return;
     g.items.forEach(it=>{
       const k=canonOf(it);
       if(k&&META[k]) m.set(g.date+'|'+k,{date:g.date,key:k,v:it.v});
     });
-  });
-  (parsed||window._fresh||[]).forEach(p=>{
-    if(p&&p.date&&!m.has(p.date+'|'+p.key)) m.set(p.date+'|'+p.key,p);
   });
   return [...m.values()];
 }
@@ -2707,27 +2782,18 @@ function impTracked(groups,parsed){
 function impCheckProgress(){
   const {total,done}=impStat();
   const pg=document.getElementById('impPg');
-  if(pg) pg.innerHTML=`已核对 <b>${done}</b>/${total} 项 · <span class="ci-cancel" onclick="clearImp()">取消导入</span>`;
+  if(pg) pg.innerHTML=`已勾选 <b>${done}</b>/${total} 项 · <span class="ci-cancel" onclick="clearImp()">取消导入</span>`;
   const go=document.getElementById('impGo');
   if(go){
-    go.textContent=done>=total?`确认导入 ${total} 项`:`还有 ${total-done} 项待核对`;
-    go.style.opacity=done>=total?'1':'.55';
-    // 没核对完时主按钮给「全部一致」，核对完才是「确认导入」
-    go.className='btn'+(done>=total?'':' ghost');
-  }
-  const all=document.getElementById('impAllOk');
-  if(all){
-    all.className='btn'+(done>=total?' ghost':'');
-    all.style.display=done>=total?'none':'';
+    go.textContent=done?`确认导入 ${done} 项`:'勾选要导入的项目';
+    go.style.opacity=done?'1':'.55';
+    go.className='btn';
   }
 }
 
 function impGoFn(){
   const {total,done}=impStat();
-  if(done<total){
-    toast(`还有 ${total-done} 项没核对：点值可直接修改，点右侧 ○ 标记一致`);
-    return;
-  }
+  if(!done){ toast('先勾选要导入的行（点右侧 ○ 变成 ✓），也可以点「全部标记一致」'); return; }
   confirmImport();
 }
 
@@ -2809,16 +2875,19 @@ function renderImpResult(){
   }
 
   // ② 逐项核对
+  // 标红的项先自动纳入日常跟踪（自定义指标），再渲染，下拉里就能看到它归到哪
+  groups.forEach(g=>g.items.forEach(autoTrack));
   const autoN=groups.reduce((s,g)=>s+g.items.filter(it=>META[canonOf(it)]).length,0);
+  const autoNew=groups.reduce((s,g)=>s+g.items.filter(it=>it._auto).length,0);
   let html=`<div class="imp-ok"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
       <b>✅ 识别到 ${allItems} 项</b>
-      <span class="ci-pg" id="impPg">已核对 <b>0</b>/${allItems} 项 · <span class="ci-cancel" onclick="clearImp()">取消导入</span></span>
+      <span class="ci-pg" id="impPg">已勾选 <b>0</b>/${allItems} 项 · <span class="ci-cancel" onclick="clearImp()">取消导入</span></span>
     </div>
     <div style="margin-top:5px;font-size:11.5px;color:#5b6b7a;line-height:1.65">
-      照原件核对，<b>数值可直接点开改</b>，无误点右侧 ○；全部核对完才写入${
+      名称和数值都能直接点开改；<b>只导入右侧勾选 ✓ 的行</b>，没勾的不会写入${
         allAbn?`（<span style="color:#d93a3a">${allAbn} 项超出参考范围</span>）`:''}。<br>
-      其中 <b>${autoN} 项已自动归类</b>到日常追踪指标；其余（如肝酶、胆红素等非追踪项）保持原件名称存档。
-      名字对不上时在右侧下拉指定一次，以后这种写法会自动认出来。
+      其中 <b>${autoN} 项已归类</b>（${autoNew?'含 ':''}${autoNew?`<b>${autoNew} 项异常</b>自动纳入日常跟踪`:''}${autoNew?'':'无自动纳入'}）。
+      归类不对可以在右侧下拉改；想让某个项目单独成一个跟踪指标，选「＋自定义…」。
     </div>
   </div>`;
 
@@ -2855,10 +2924,11 @@ function renderImpResult(){
       已按参考区间修正（预览里显示的就是修正后的值），如与原件不符请直接改。</div>`;
   }
 
-  const tracked=impTracked(groups,fresh);
+  const tracked=impTracked(groups);
   if(tracked.length){
     html+=`<div class="imp-ok" style="background:#f4faf7;margin-top:10px">
       <b>📈 其中 ${tracked.length} 项属于日常追踪指标，会同步到趋势图</b>
+      <div style="margin-top:6px;font-size:11.5px;color:#5b6b7a">只同步已勾选的行；未勾选的不写入。</div>
       <div style="margin-top:6px;font-size:12px;line-height:1.85">
       ${Object.keys(tracked.reduce((m,p)=>{(m[p.date]=m[p.date]||[]).push(p);return m;},{})).sort().map(d=>
         `<div><b>${d}</b>：${tracked.filter(p=>p.date===d).map(p=>{
@@ -2878,8 +2948,8 @@ function renderImpResult(){
   }
 
   res.innerHTML=html;
-  setImpActions(`<button class="btn ghost" id="impGo" style="flex:1.6" onclick="impGoFn()">还有 ${allItems} 项待核对</button>
-    <button class="btn" id="impAllOk" style="flex:1" onclick="impAllOk()">全部一致</button>`);
+  setImpActions(`<button class="btn" id="impGo" style="flex:1.6" onclick="impGoFn()">勾选要导入的项目</button>
+    <button class="btn ghost" id="impAllOk" style="flex:1" onclick="impAllOk()">全部标记一致</button>`);
   window._fresh=fresh;
   impCheckProgress();
 }
@@ -2888,12 +2958,24 @@ function renderImpResult(){
 function confirmImport(){
   const groups=groupImp();
   if(!groups.length) return;
-  const {total,done}=impStat();
-  if(done<total){ toast(`还有 ${total-done} 项没核对`); return; }
+  // 只导入勾选过的行：没勾的既不写报告，也不进趋势
+  const sel=groups.map(g=>({date:g.date,meta:g.meta,items:g.items.filter(it=>it._ok)}))
+                 .filter(g=>g.items.length);
+  if(!sel.length){ toast('还没有勾选任何项目'); return; }
 
-  // 趋势指标以「核对表里的值」和「核对时指定的归属」为准：
+  // 自动纳入的自定义指标：持久化到 metrics，并学会别名（下次自动归类）
+  DB.metrics=DB.metrics||{};
+  sel.forEach(g=>g.items.forEach(it=>{
+    const k=it.cn;
+    if(k&&META[k]&&META[k].custom){
+      DB.metrics[k]={n:META[k].n,u:META[k].u||'',ref:META[k].ref||null,dir:META[k].dir||'range'};
+      if(it._auto){ learnAlias(it.n,k); it._auto=false; }
+    }
+  }));
+
+  // 趋势指标以「已勾选行的值」和「核对时指定的归属」为准：
   // 医院写法不同、但归到同一指标的，只写一条，不会在趋势里变成两条
-  const fresh=impTracked(groups,window._fresh||[]);
+  const fresh=impTracked(sel);
 
   fresh.forEach(p=>{
     DB.labs[p.date]=DB.labs[p.date]||{};
@@ -2903,10 +2985,10 @@ function confirmImport(){
     DB.logs.unshift({type:'lab',date:p.date,ts:Date.now(),key:p.key,v:p.v});
   });
 
-  // 整份报告入库：所有项目（含正常项）都存，异常项只是标出来
+  // 报告入库：勾选的项目都存（含正常项），异常项只是标出来
   DB.rpt=DB.rpt||{};
   let rn=0, newN=0, updN=0, abnN=0;
-  for(const g of groups){
+  for(const g of sel){
     const d=g.date||'日期未识别';
     const cur=DB.rpt[d]=(DB.rpt[d]&&DB.rpt[d].items)?DB.rpt[d]:{items:[]};
     // 医院/科室等报告级信息：存进这份报告的 meta，跟项目一起进 facts
@@ -2935,7 +3017,7 @@ function confirmImport(){
   if(fresh.length) msg.push(`${fresh.length} 项进趋势图`);
   document.getElementById('impResult').innerHTML=
     `<div class="imp-ok"><b>✅ 已记录 ${msg.join('、')}</b><br>
-     <span style="font-size:12px;color:#51606f">${rn} 项全部存入「记录 → 化验报告」（新增 ${newN} 项${updN?`、更新 ${updN} 项`:''}），其中 ${abnN} 项异常已标红。${fresh.length?'趋势图已更新。':''}</span></div>`;
+     <span style="font-size:12px;color:#51606f">只写入已勾选的 ${rn} 项（新增 ${newN} 项${updN?`、更新 ${updN} 项`:''}），其中 ${abnN} 项异常已标红。${fresh.length?'趋势图已更新。':''}</span></div>`;
   setImpActions(`<button class="btn ghost" onclick="clearImp()">完成</button>`);
   impFiles=[]; impParsed=[]; impRpt=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0; impOver={};
   document.getElementById('impFile').value='';
@@ -3136,7 +3218,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.3.3 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.4.0 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
