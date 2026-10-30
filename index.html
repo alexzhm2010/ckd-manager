@@ -350,6 +350,11 @@ box-shadow:0 14px 50px rgba(0,0,0,.3);animation:fade .3s ease}
     <div id="impProg" style="display:none;margin-top:10px"></div>
     <div id="impResult" style="margin-top:10px"></div>
     <div id="impActions" class="imp-actions"></div>
+    <details style="margin-top:12px">
+      <summary style="font-size:12px;color:#2f6fb5;cursor:pointer">识别不准？把报告文字粘贴进来解析</summary>
+      <textarea id="impPaste" placeholder="按行粘贴项目名、结果、参考范围，例如：&#10;血清肌酐 130 57-97 μmol/L" style="margin-top:8px;min-height:92px;font-size:13px"></textarea>
+      <button class="btn ghost sm" style="margin-top:8px" onclick="parsePastedText()">解析这段文字</button>
+    </details>
     <div class="muted" style="font-size:11.5px;margin-top:12px;line-height:1.7">
       📌 <b>识别方式</b><br>
       ① <b>文字版 PDF</b>：浏览器本地直接读文字，最快最准，无需下载引擎<br>
@@ -1153,6 +1158,7 @@ let impOrphan=0;       // 有异常箭头但数值未识别的行数
 let impSeqMiss=0, impSeqMax=0;   // 序号缺口（漏识别项）
 let impLowConf=0;      // 整页平均置信度偏低的页数
 let impWorker=null, impRunId=0;  // 正在跑的 OCR worker / 本次解析编号（用于取消旧任务）
+let impTextAll='';     // 本次识别出的原始文字，用于失败时排查
 let ocrWorker=null;
 
 /* 指标别名表：用于在 OCR 文本中定位 */
@@ -1244,6 +1250,26 @@ function removeImp(i){
   if(!impFiles.length) clearImp();
 }
 
+/* 粘贴文字解析：OCR 结果不理想时的兜底入口，走同一套核对与写入流程 */
+function parsePastedText(){
+  const ta=document.getElementById('impPaste');
+  const txt=(ta&&ta.value||'').trim();
+  if(txt.length<8){ toast('请先粘贴报告文字'); return; }
+  ++impRunId;                       // 让正在跑的 OCR 任务自行退出
+  if(impWorker){ try{ impWorker.terminate(); }catch(e){} impWorker=null; }
+  impDone=true; impProgressHide(); setImpActions('');
+  impParsed=[]; impRpt=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0; impOver={}; impLowConf=0; window._fresh=[];
+  impTextAll=txt;
+  extractFromText(txt,'粘贴文字');
+  const pr=parseItems(txt); pr.src='粘贴文字';
+  if(pr.items.length) impRpt.push(pr);
+  impOrphan+=countOrphanArrows(txt);
+  impSeqMax=Math.max(impSeqMax,pr.max); impSeqMiss+=pr.missing;
+  renderImpResult();
+  const box=document.getElementById('impResult');
+  if(box) window.scrollTo({top:box.getBoundingClientRect().top+scrollY-12,behavior:'smooth'});
+}
+
 /* ---------- 加载第三方库（按需） ---------- */
 function loadScript(src){
   return new Promise((res,rej)=>{
@@ -1264,6 +1290,7 @@ async function parseReports(){
   impDone=false;
   // 每次解析都必须清空上一次的累计结果，否则重新选文件会把旧报告一起带进来
   impParsed=[]; impRpt=[]; impOrphan=0; impSeqMiss=0; impSeqMax=0; impOver={}; impLowConf=0; window._fresh=[];
+  impTextAll='';
   let worker=null;
 
   impProgress('加载识别引擎…',5);
@@ -1368,6 +1395,7 @@ async function parseReports(){
         }
       }
       extractFromText(fullText, job.name);
+      impTextAll += (impTextAll?'\n\n':'') + fullText;
       const pr=parseItems(fullText);
       pr.src=job.name;
       if(pr.items.length) impRpt.push(pr);
@@ -2372,9 +2400,16 @@ function renderImpResult(){
   const allAbn=groups.reduce((s,g)=>s+g.items.filter(isAbn).length,0);
 
   if(!allItems&&!impParsed.length){
+    const raw=(impTextAll||'').trim();
     res.innerHTML=`<div class="imp-dup"><b>⚠️ 未能识别出有效指标</b><br>
-      可能原因：图片清晰度不足、报告版式特殊、或识别结果与已知指标名不匹配。<br><br>
-      <b>建议</b>：换成更清晰的截图/PDF 重试；或把报告直接发给我（在对话里上传），我逐页人工核对。</div>`;
+      可能原因：图片清晰度不足、报告版式特殊、或识别出的项目名与指标表不匹配。<br><br>
+      <b>建议</b>：优先用文字版 PDF；或展开下方「识别到的原始文字」，确认是不是文字本身就错了。</div>`
+      +(raw?`<details style="margin-top:10px">
+        <summary style="font-size:12px;color:#2f6fb5;cursor:pointer">识别到的原始文字（${raw.length} 字）</summary>
+        <div style="margin-top:6px;font-size:11.5px;line-height:1.7;white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto;background:#fbfcfd;border:1px solid #e6ebf0;border-radius:8px;padding:8px">${esc(raw)}</div>
+        <div class="muted" style="margin-top:6px;font-size:11px">文字本身是乱码时，换 PDF 原件最有效</div>
+      </details>`:'')
+      +`<div class="muted" style="margin-top:8px;font-size:11.5px">也可以在下方「把报告文字粘贴进来解析」里手工粘贴文字后再解析一次。</div>`;
     setImpActions('');
     return;
   }
