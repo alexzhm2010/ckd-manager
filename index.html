@@ -1067,30 +1067,50 @@ function seriesOf(k){
   return [...m.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([date,v])=>({date,v}));
 }
 
-/* 我的目标值：只列「近 3 次记录中有不达标」的指标，仍按化验类型/归类分组 */
+/* 最近 3 次有数据的日期（报告或补录都算） */
+function recentRecDates(n){
+  const ds=new Set();
+  Object.keys(DB.rpt||{}).forEach(d=>{ if(rptItems(d).length) ds.add(d); });
+  Object.keys(DB.labs||{}).forEach(d=>{ if(Object.keys(DB.labs[d]||{}).length) ds.add(d); });
+  return [...ds].sort().slice(-n);
+}
+/* 某指标的最新一次记录（数值或定性结果都支持） */
+function latestOf(k){
+  const h=last(k);
+  if(h) return {v:h.v,date:h.date,bad:flagOf(h.v,META[k])};
+  let out=null;
+  Object.keys(DB.rpt||{}).sort().reverse().some(d=>{
+    const it=rptItems(d).find(x=>canonOf(x)===k);
+    if(it){ out={v:it.v,date:d,bad:isAbn(it)?'bad':null}; return true; }
+    return false;
+  });
+  return out;
+}
+/* 我的目标值：只列「最近 3 次记录中有不达标」的条目，仍按化验类型/归类分组 */
 function renderGoals(){
   const el=document.getElementById('goalTb'); if(!el) return;
   const cnt=document.getElementById('goalCount');
+  const badKeys=new Set();
+  recentRecDates(3).forEach(d=>{
+    rptItems(d).forEach(it=>{ if(isAbn(it)) badKeys.add(canonOf(it)); });
+    Object.keys(DB.labs[d]||{}).forEach(k=>{ if(flagOf(DB.labs[d][k],META[k])) badKeys.add(k); });
+  });
   let shown=0;
   const html=canonGroups().map(g=>{
-    const items=g.items.filter(o=>{
-      const m=META[o.k];
-      if(!m||!m.ref||m.ref.length<2) return false;
-      return seriesOf(o.k).slice(-3).some(x=>flagOf(x.v,m));
-    });
+    const items=g.items.filter(o=>badKeys.has(o.k));
     if(!items.length) return '';
     shown+=items.length;
     const head=`<tr><td colspan="3" style="background:#f2f6f9;color:#2f6fb5;font-size:12px;font-weight:600;padding:7px 9px">${esc(g.lab+' · '+g.cat)}</td></tr>`;
     const rows=items.map(o=>{
-      const m=META[o.k], l=last(o.k), bad=l&&flagOf(l.v,m);
+      const m=META[o.k], l=latestOf(o.k);
       const v=l?(typeof l.v==='number'?fmt(l.v):String(l.v)):'—';
       return `<tr><td><b>${esc(o.n)}</b></td>
-        <td style="color:#7b8794;font-size:12px">${m.goal?esc(m.goal):'<span class="muted">未设目标</span>'}</td>
-        <td style="text-align:right;font-weight:600${bad?';color:#d93a3a':''}">${esc(v)}</td></tr>`;
+        <td style="color:#7b8794;font-size:12px">${m&&m.goal?esc(m.goal):'<span class="muted">未设目标</span>'}</td>
+        <td style="text-align:right;font-weight:600${l&&l.bad?';color:#d93a3a':''}">${esc(v)}</td></tr>`;
     }).join('');
     return head+rows;
   }).join('');
-  if(cnt) cnt.textContent=shown?`近 3 次有异常 ${shown} 项`:'';
+  if(cnt) cnt.textContent=shown?`最近 3 次有异常 ${shown} 项`:'';
   el.innerHTML=html||'<tr><td colspan="3" class="empty" style="padding:14px 8px;text-align:center">最近 3 次记录中没有不达标指标 ✅</td></tr>';
 }
 
@@ -3538,7 +3558,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.7.2 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.7.3 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
