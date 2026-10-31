@@ -318,7 +318,7 @@ border-radius:50%;animation:spin .85s linear infinite}
   <div class="card">
     <h2><span class="t"><span class="bar"></span>化验报告（全部项目）</span><span class="muted" id="rptCount"></span></h2>
     <div class="muted" style="font-size:11.5px;margin-bottom:9px;line-height:1.65">
-      报告里的每一项都能直接改：名称、数值、归类（单位与日期只读）。改完立即保存到云端，并同步趋势图。
+      每份报告默认折叠，只显示日期、医院、科室与项数；点「展开」查看这份报告的全部指标，之后可逐项改名称、数值、归类（单位与日期只读）。改完立即保存到云端，并同步趋势图。
     </div>
     <div class="mt-bar">
       <input id="rptQ" placeholder="筛选原始指标名称" oninput="rptSearch(this.value)">
@@ -2359,17 +2359,11 @@ function countOrphanArrows(text){
 }
 
 /* ---------- 记录页：整份化验报告，逐项可编辑 ---------- */
-let rptOpen={};        // 某一份报告是否展开全部项目
-let rptShow={};        // 往期报告是否展开（默认折叠，只露标题）
-let rptAll=false;      // 是否列出全部日期
-let rptQ='';           // 按原始指标名称筛选
-const RECENT_RPT=3;    // 默认只展示最近 3 份，往期折叠
+let rptShow={};        // 某份报告是否展开；默认全部折叠，只露日期/医院/科室
+let rptQ='';           // 按指标名称筛选
 
-
-function toggleRpt(d){ rptOpen[d]=!rptOpen[d]; if(rptOpen[d]) rptShow[d]=true; renderRpt(); }
-function toggleRptAll(){ rptAll=!rptAll; renderRpt(); }
-function toggleRptShow(d){ rptShow[d]=!rptShow[d]; if(!rptShow[d]) rptOpen[d]=false; renderRpt(); }
-function rptSearch(v){ rptQ=String(v||'').trim(); rptOpen={}; renderRpt(); }
+function toggleRptShow(d){ rptShow[d]=!rptShow[d]; renderRpt(); }
+function rptSearch(v){ rptQ=String(v||'').trim(); renderRpt(); }
 function rptClearQ(){ const el=document.getElementById('rptQ'); if(el) el.value=''; rptSearch(''); }
 /* 重新渲染但保住滚动位置，改一项不至于跳回顶部 */
 function rptPaint(){ const y=window.scrollY; renderRpt(); window.scrollTo(0,y); }
@@ -2430,24 +2424,19 @@ function renderRpt(){
     el.innerHTML='<div class="empty">没有名称匹配的项目</div>';
     return;
   }
-  const shownDates=q.length?dates:(rptAll?dates:dates.slice(0,RECENT_RPT));
-  const html=shownDates.map(d=>{
+  // 每份报告都是一张可折叠卡片：默认只露日期/医院/科室，展开后显示全部指标
+  const html=dates.map(d=>{
     const items=rptItems(d);
     const matched=q.length?items.filter(qMatch):items;
     if(q.length&&!matched.length) return '';
-    const idx=dates.indexOf(d);
-    const recent=idx<RECENT_RPT;
-    const open=!!rptOpen[d];
-    const shown=q.length?true:(recent||!!rptShow[d]);
-    const abn=matched.filter(isAbn);
-    // 当前显示哪些项：筛选时只显示匹配项；展开时全显示；否则异常项（无异常则前 6 项）
+    const shown=q.length?true:!!rptShow[d];
+    const abn=items.filter(isAbn);
+    // 展开时显示全部指标；搜索时只显示匹配项
     let vis=[];
-    items.forEach((it,i)=>{
-      if(q.length){ if(qMatch(it)) vis.push(i); }
-      else if(open){ vis.push(i); }
-      else if(shown){ if(abn.length?isAbn(it):i<6) vis.push(i); }
-    });
-    const hidden=shown&&!q.length&&!open?items.length-vis.length:0;
+    if(shown){
+      if(q.length) items.forEach((it,i)=>{ if(qMatch(it)) vis.push(i); });
+      else vis=items.map((_,i)=>i);
+    }
     const rm=(DB.rpt[d]&&DB.rpt[d].meta)||{};
     const who=[rm.hospital,rm.dept].filter(Boolean).join(' · ');
     return `<div style="margin-bottom:16px">
@@ -2457,20 +2446,15 @@ function renderRpt(){
           q.length?`${matched.length} 项匹配 / 共 ${items.length} 项`
           :`${items.length} 项${abn.length?` · ${abn.length} 项异常`:' · 全部在参考范围'}`}</span>
         <div class="ops">
-          ${(!q.length&&!recent)?`<button class="mini" onclick="toggleRptShow('${d}')">${shown?'收起':'展开'}</button>`:''}
+          ${!q.length?`<button class="mini" onclick="toggleRptShow('${d}')">${shown?'收起':'展开'}</button>`:''}
           <button class="mini rpt-del" onclick="delRpt('${d}')" title="删除这份报告">删除</button>
         </div>
       </div>
       ${who?`<div class="rpt-sub">🏥 ${esc(who)}${rm.specimen?` · 标本 ${esc(rm.specimen)}`:''}</div>`:''}
       ${shown?vis.map(i=>rptEdRow(d,i,items[i])).join(''):''}
-      ${(shown&&hidden>0)?`<div class="rpt-more"><button class="mini" onclick="toggleRpt('${d}')">展开全部 ${items.length} 项（还有 ${hidden} 项）</button></div>`:''}
-      ${(shown&&open)?`<div class="rpt-more"><button class="mini" onclick="toggleRpt('${d}')">收起</button></div>`:''}
     </div>`;
   }).join('');
-  el.innerHTML=html + (dates.length>RECENT_RPT&&!q.length
-    ? `<div class="muted" style="font-size:11.5px">…${rptAll?'共':'另有'} ${dates.length} 份报告
-        <button class="mini" style="margin-left:6px" onclick="toggleRptAll()">${rptAll?'只看最近 '+RECENT_RPT+' 份':'显示全部'}</button></div>`
-    : '');
+  el.innerHTML=html;
 }
 
 /* 删除某一天的整份报告：报告项目 + 由它产生的趋势值与日志一起清掉
@@ -2484,7 +2468,6 @@ function delRpt(d){
     if(!Object.keys(DB.labs[d]).length) delete DB.labs[d];
   }
   DB.logs=(DB.logs||[]).filter(l=>!(l.type==='lab'&&l.date===d&&keys.has(l.key)));
-  delete rptOpen[d];
   delete rptShow[d];
   save(); renderRpt(); renderHome(); drawChart(); renderVisit();
   toast('已删除该报告');
@@ -3558,7 +3541,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.7.3 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.7.4 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
