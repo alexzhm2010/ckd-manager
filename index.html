@@ -232,14 +232,14 @@ nav div.on{color:var(--pri2);font-weight:600}
 .badge{display:inline-block;font-size:11px;padding:1px 7px;border-radius:7px;background:#eef4f8;color:var(--pri);margin-left:4px}
 /* 复查周期下拉：按分类维护，随账号持久化 */
 .rv-sel{border:1px solid #dbe3ea;background:#fff;border-radius:9px;font-size:11px;
-padding:1px 3px;color:var(--pri);font-family:inherit;vertical-align:1px}
+padding:1px 3px;color:var(--pri);font-family:inherit;vertical-align:1px;flex:0 0 auto;width:84px}
 /* 复查分组 */
 .vg{padding:11px 0;border-bottom:1px solid var(--line)}
 .vg:last-child{border-bottom:none;padding-bottom:0}
 .vg:first-child{padding-top:0}
-.vg-hd{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.vg-hd b{font-size:14px}
-.vg-meta{font-size:11.5px;color:var(--muted);margin-top:2px}
+.vg-hd{display:flex;align-items:center;gap:8px}
+.vg-hd .nm{flex:1;min-width:0;font-size:14px}
+.vg-hd .badge{flex:0 0 84px;text-align:center;margin-left:0;font-size:10.5px;white-space:nowrap}
 .vg-keys{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
 .vg-key{font-size:11.5px;background:#f4f7fa;border:1px solid var(--line);border-radius:8px;
 padding:2px 7px;color:#51606f;white-space:nowrap}
@@ -3333,8 +3333,7 @@ function renderVisit(){
       return `<span class="vg-key${hot?' stale':''}"><b>${it.n}</b> ${it.last?dateStr(it.last):'—'}${it.days!=null?' · '+it.days+'天':''}</span>`;
     }).join('');
     return `<div class="vg">
-      <div class="vg-hd"><b>${g.n}</b>${visitBadge(s.st,s.days)}</div>
-      <div class="vg-meta">建议 ${reviewSelect(g.id,g.days)}${s.lastDate?` · 最近 ${s.lastDate}（${(META[s.lastK]&&META[s.lastK].n)||s.lastK}）`:' · 暂无记录'}</div>
+      <div class="vg-hd"><b class="nm">${g.n}</b>${reviewSelect(g.id,g.days)}${visitBadge(s.st,s.days)}</div>
       <div class="vg-keys">${chips}</div>
     </div>`;
   }).join('');
@@ -3352,8 +3351,7 @@ function renderVisit(){
     : '<div class="empty">组内各项均在建议周期内 ✅</div>';
 
   document.getElementById('checkManual').innerHTML=CHECK_MANUAL.map(c=>
-    `<div class="list-item"><div class="dt">建议</div><div style="flex:1">${c.n}
-      <div style="margin-top:3px">${reviewSelect(c.id,c.days)}</div></div></div>`).join('');
+    `<div class="list-item"><div style="flex:1">${c.n}</div>${reviewSelect(c.id,c.days)}</div>`).join('');
 
   document.getElementById('qList').innerHTML=QUESTIONS.map(q=>`<div class="list-item"><div class="dt">💬</div><div>${q}</div></div>`).join('');
 }
@@ -3483,7 +3481,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.8.4 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.8.5 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
