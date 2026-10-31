@@ -99,33 +99,25 @@ background:var(--pri2);color:#fff;cursor:pointer;width:100%;transition:.15s}
 .bp.hi{color:var(--red)}
 /* ==== 图表 ==== */
 .chart{width:100%;height:230px}
-.seg{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
-.seg button{border:1px solid #dbe3ea;background:#fff;color:#5b6b7a;
+.mg-chips button{border:1px solid #dbe3ea;background:#fff;color:#5b6b7a;
 border-radius:20px;padding:6px 13px;font-size:12.5px;cursor:pointer;transition:.15s;font-family:inherit;
 max-width:100%;line-height:1.45;text-align:center}
-.seg button.on{background:var(--pri2);border-color:var(--pri2);color:#fff;font-weight:600}
-.seg-ops{display:flex;justify-content:space-between;align-items:center;margin:-2px 0 8px}
+.mg-chips button.on{background:var(--pri2);border-color:var(--pri2);color:#fff;font-weight:600}
+.seg-ops{display:flex;justify-content:space-between;align-items:center;margin:-2px 0 8px;gap:10px}
 .mini{border:1px solid #dbe3ea;background:#fff;color:#7b8794;border-radius:14px;
-padding:3px 11px;font-size:11.5px;cursor:pointer;font-family:inherit;transition:.15s}
+padding:3px 11px;font-size:11.5px;cursor:pointer;font-family:inherit;transition:.15s;white-space:nowrap}
 .mini:active{background:#eef4f8}
 /* 多选时每个指标带自己的色点 */
-.seg button .sw{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;
+.mg-chips button .sw{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;
 vertical-align:1px;border:1px solid rgba(0,0,0,.12)}
-/* 未选指标上的异常次数角标 */
-.seg .seg-badge{display:inline-block;margin-left:5px;padding:0 5px;border-radius:8px;
-font-size:10px;line-height:15px;background:#fdeaea;color:var(--red);vertical-align:1px}
-.seg .seg-badge.mild{background:#fdf3e3;color:var(--amber)}
-/* ＋/× 更多指标按钮 */
-.seg .seg-add{width:30px;height:30px;padding:0;border-style:dashed;border-radius:50%;
-display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;
-color:#7b8794;background:#fbfcfd}
-.seg .seg-add:hover{border-color:var(--pri2);color:var(--pri2)}
-/* 展开后的更多指标：按有无异常分组 */
-.seg-more{display:none;flex-direction:column;gap:6px;margin:-2px 0 10px}
-.seg-more.on{display:flex}
-.seg-more .grp{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-.seg-more .grp .lb{font-size:11px;color:var(--muted);flex:0 0 auto;margin-right:2px}
-.seg-more .grp .lb b{color:var(--red);font-weight:700}
+/* 指标选择：按化验类型/归类分组；最近三次有不合格的直出，其余收起 */
+.mg-grp{margin-bottom:11px}
+.mg-t{font-size:11.5px;color:#2f6fb5;font-weight:600;margin-bottom:5px}
+.mg-chips{display:flex;flex-wrap:wrap;gap:6px}
+.mg-rest{margin-top:6px}
+.mg-none{font-size:11.5px;color:#a7b2be;padding:3px 1px}
+.mg-more{margin-top:5px}
+.mg-more .mini{margin-left:1px}
 /* 双轴提示条 */
 .axis-note{background:#f2f6f9;border-radius:10px;padding:7px 10px;font-size:11.5px;
 color:#51606f;margin-bottom:8px;line-height:1.55;display:none}
@@ -333,10 +325,9 @@ border-radius:50%;animation:spin .85s linear infinite}
 <section class="page" id="p-chart">
   <div class="card">
     <h2><span class="t"><span class="bar"></span>指标趋势</span><span class="muted" id="selCount"></span></h2>
-    <div class="seg" id="segBox"></div>
-    <div class="seg-more" id="segMore"></div>
+    <div id="segBox"></div>
     <div class="seg-ops">
-      <span class="muted" style="font-size:11.5px">默认显示最近 3 次记录中有不达标的指标</span>
+      <span class="muted" style="font-size:11.5px">默认只展示肌酐；每组上方为最近 3 次有不合格的指标，其余可展开</span>
       <button class="mini" onclick="clearSel()">清空</button>
     </div>
     <div class="axis-note" id="axisNote"></div>
@@ -976,8 +967,8 @@ function toggleMed(k){
 
 /* ==================== 图表（多指标对比） ==================== */
 let chart=null;
-let selKeys=[];                 // 当前选中的对比指标（最多 6 项，决定左右轴归属）
-let segMoreOpen=false;          // 「＋ 更多指标」是否展开
+let selKeys=[];                 // 当前选中的对比指标
+let segOpen={};                 // 各「化验类型 · 归类」的其余指标是否展开
 let selInited=false;            // 首次进入指标页时按异常情况给默认选择
 const COLORS=['#1287b8','#e08b0a','#1a9e63','#a855c7','#d93a3a','#0f9ba8'];
 const colorOf=k=>COLORS[selKeys.indexOf(k)%COLORS.length];
@@ -1017,50 +1008,48 @@ function chartMetricKeys(){
   DICTBYKEY.forEach((_,k)=>ks.add(k));
   return [...ks].filter(k=>seriesOf(k).length);
 }
-/* 默认展示：最近 3 次记录中有不达标的标准指标 */
-function trendDefaultKeys(){
-  const bad=recentBadKeys();
-  return chartMetricKeys().filter(k=>bad.has(k));
-}
 function initTrendSel(){
   if(selInited) return;
   selInited=true;
-  selKeys=trendDefaultKeys();
+  selKeys=chartMetricKeys().includes('crea')?['crea']:[];   // 默认只看肌酐
 }
 
-function segChip(k,bad){
+function segChip(k){
   const on=selKeys.includes(k);
   const c=on?colorOf(k):'#cfd8e0';
-  const hit=bad&&bad.has(k);
   const nm=metaOf(k).n;
-  const badge=hit?'<span class="seg-badge">异常</span>':'';
   return `<button class="${on?'on':''}" onclick="toggleKey('${k}')"
-    title="${esc(nm)}${hit?' · 最近 3 次记录中有不达标':''}">
-    <span class="sw" style="background:${c}"></span>${esc(nm.replace(/[（(].*?[)）]/,''))}${badge}</button>`;
+    title="${esc(nm)}"><span class="sw" style="background:${c}"></span>${esc(nm.replace(/[（(].*?[)）]/,''))}</button>`;
 }
+/* 指标选择区：按化验类型/归类分组；最近 3 次有不合格的标签直出，其余收起 */
 function renderSeg(){
   const bad=recentBadKeys();
   const box=document.getElementById('segBox');
   if(!box) return;
-  // 顶部只放已选指标，默认可视化压力小；其余指标收进「＋」
-  const picked=selKeys.map(k=>segChip(k,bad)).join('');
-  box.innerHTML=picked+
-    `<button class="seg-add" onclick="toggleSegMore()" title="${segMoreOpen?'收起指标':'更多指标'}">${segMoreOpen?'×':'＋'}</button>`;
-  const more=document.getElementById('segMore');
-  if(more){
-    const all=chartMetricKeys();
-    const b=all.filter(k=>bad.has(k));
-    const g=all.filter(k=>!bad.has(k));
-    const grp=(lb,ks)=>`<div class="grp"><span class="lb">${lb}</span>${
-      ks.map(k=>segChip(k,bad)).join('')||'<span class="lb">无</span>'}</div>`;
-    more.innerHTML=grp(`最近 3 次有异常 <b>${b.length}</b> 项`,b)
-      +grp(`其余指标 <b style="color:#7b8794">${g.length}</b> 项`,g);
-    more.classList.toggle('on',segMoreOpen);
-  }
+  const avail=new Set(chartMetricKeys());
+  let html='';
+  canonGroups().forEach((g,gi)=>{
+    const items=g.items.filter(o=>avail.has(o.k));
+    if(!items.length) return;
+    // 已选中的指标即使不在异常组里也保持可见，避免选完就找不到
+    const vis=items.filter(o=>bad.has(o.k)||selKeys.includes(o.k));
+    const rest=items.filter(o=>!vis.includes(o));
+    html+=`<div class="mg-grp"><div class="mg-t">${esc(g.lab+' · '+g.cat)}</div>`;
+    html+=vis.length?`<div class="mg-chips">${vis.map(o=>segChip(o.k)).join('')}</div>`
+      :`<div class="mg-none">最近三次均正常</div>`;
+    if(rest.length){
+      const open=!!segOpen[gi];
+      html+=`<div class="mg-more"><button class="mini" onclick="toggleSegGroup(${gi})">${
+        open?'收起':'其他 '+rest.length+' 项 ＋'}</button>${
+        open?`<div class="mg-chips mg-rest">${rest.map(o=>segChip(o.k)).join('')}</div>`:''}</div>`;
+    }
+    html+='</div>';
+  });
+  box.innerHTML=html||'<div class="mg-none">还没有可展示的指标</div>';
   const cnt=document.getElementById('selCount');
   if(cnt) cnt.textContent=selKeys.length?`已选 ${selKeys.length} 项`:'未选指标';
 }
-function toggleSegMore(){ segMoreOpen=!segMoreOpen; renderSeg(); }
+function toggleSegGroup(g){ segOpen[g]=!segOpen[g]; renderSeg(); }
 function toggleKey(k){
   const i=selKeys.indexOf(k);
   if(i>=0){ selKeys.splice(i,1); }
@@ -3439,7 +3428,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.7.9 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.8.0 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
