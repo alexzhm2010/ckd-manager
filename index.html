@@ -344,7 +344,10 @@ border-radius:50%;animation:spin .85s linear infinite}
   </div>
   <div class="card">
     <h2><span class="t"><span class="bar"></span>我的目标值</span></h2>
-    <table class="tb"><tbody id="goalTb"></tbody></table>
+    <table class="tb">
+      <thead><tr><th>指标</th><th>目标</th><th style="text-align:right">最新</th></tr></thead>
+      <tbody id="goalTb"></tbody>
+    </table>
   </div>
   <div class="card">
     <h2><span class="t"><span class="bar"></span>报告导入</span><span class="muted" id="impState"></span></h2>
@@ -1064,6 +1067,22 @@ function seriesOf(k){
   return [...m.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([date,v])=>({date,v}));
 }
 
+/* 我的目标值：全部标准指标按「化验类型 → 归类」分组展示，没有目标的标“未设目标” */
+function renderGoals(){
+  const el=document.getElementById('goalTb'); if(!el) return;
+  el.innerHTML=canonGroups().map(g=>{
+    const head=`<tr><td colspan="3" style="background:#f2f6f9;color:#2f6fb5;font-size:12px;font-weight:600;padding:7px 9px">${esc(g.lab+' · '+g.cat)}</td></tr>`;
+    const rows=g.items.map(o=>{
+      const m=META[o.k], l=last(o.k);
+      const v=l?(typeof l.v==='number'?fmt(l.v):String(l.v)):'—';
+      return `<tr><td><b>${esc(o.n)}</b></td>
+        <td style="color:#7b8794;font-size:12px">${m&&m.goal?esc(m.goal):'<span class="muted">未设目标</span>'}</td>
+        <td style="text-align:right;font-weight:600">${esc(v)}</td></tr>`;
+    }).join('');
+    return head+rows;
+  }).join('');
+}
+
 function drawChart(){
   const keys=selKeys.filter(k=>META[k]);
   if(!keys.length){
@@ -1202,26 +1221,32 @@ function drawChart(){
     ? `共 ${total} 个时间点 · 已选 ${keys.length} 项：${keys.map(k=>META[k].n).join('、')}`
     : `共 ${total} 次记录 · ${META[keys[0]].n}（${META[keys[0]].u}）· 目标：${META[keys[0]].goal}`;
 
-  document.getElementById('goalTb').innerHTML=ORDER.map(k=>{
-    const mm=META[k]; const l=last(k);
-    return `<tr><td><b>${mm.n}</b></td><td style="color:#7b8794;font-size:12px">${mm.goal}</td><td style="text-align:right;font-weight:600">${l?fmt(l.v):'—'}</td></tr>`;
-  }).join('');
 }
 function addLab(){
   const d=document.getElementById('labDate').value||today();
   const k=document.getElementById('labKey').value;
   const v=+document.getElementById('labVal').value;
+  if(!k) return toast('请选择指标');
   if(!v&&v!==0) return toast('请输入数值');
+  const dm=DICTBYKEY.get(k);
+  const nm=(META[k]&&META[k].n)||(dm&&dm.n)||k;
   // 同日同项已存在时允许覆盖，不再提示「先删除旧记录」——页面里并没有删除入口
   if(DB.labs[d] && DB.labs[d][k]!=null){
-    if(!confirm(`${d} 已有「${META[k].n}」= ${DB.labs[d][k]}，是否用 ${v} 覆盖？`)) return;
+    if(!confirm(`${d} 已有「${nm}」= ${DB.labs[d][k]}，是否用 ${v} 覆盖？`)) return;
     DB.logs=DB.logs.filter(x=>!(x.type==='lab'&&x.date===d&&x.key===k));
+  }
+  // 手动补录字典里的指标时，纳入跟踪，方便在趋势图标出来
+  if(!META[k]&&dm){
+    const m={n:dm.n,u:dm.u||'',ref:null,dir:'range'};
+    registerMetric(k,m);
+    DB.metrics=DB.metrics||{};
+    DB.metrics[k]=m;
   }
   DB.labs[d]=DB.labs[d]||{};
   DB.labs[d][k]=v;
   DB.logs.unshift({type:'lab',date:d,ts:Date.now(),key:k,v:v});
   save(); document.getElementById('labVal').value='';
-  drawChart(); renderHome(); renderVisit(); toast('已添加');
+  drawChart(); renderHome(); renderVisit(); renderGoals(); toast('已添加');
 }
 
 /* ==================== 报告导入（OCR） ==================== */
@@ -2540,8 +2565,8 @@ function dictFallback(){
   }));
   setDict(rows);
 }
-/* 下拉内容只拼一次，之后按当前归属补 selected，避免每行重复生成上百个选项 */
-function buildAssignBase(){
+/* 全部标准指标按「化验类型 → 归类 → 标准名」分组（归类下拉、补录、目标值共用） */
+function canonGroups(){
   const groups=new Map();
   const add=(lab,cat,k,n)=>{
     if(!k) return;
@@ -2553,11 +2578,20 @@ function buildAssignBase(){
   Object.keys(META).forEach(k=>{ if(!DICTBYKEY.has(k)) add('其他','其他已登记指标',k,(META[k]&&META[k].n)||k); });
   const gs=[...groups.values()].sort((a,b)=>labRank(a.lab)-labRank(b.lab)||a.lab.localeCompare(b.lab,'zh')||
     String(a.cat).localeCompare(String(b.cat),'zh'));
-  return '<option value="">未归类</option>' + gs.map(g=>{
-    const items=g.items.slice().sort((a,b)=>a.n.localeCompare(b.n,'zh'));
-    return `<optgroup label="${esc(g.lab+' · '+g.cat)}">`+
-      items.map(o=>`<option value="${esc(o.k)}">${esc(o.n)}</option>`).join('')+'</optgroup>';
-  }).join('') + '<option value="__custom">＋自定义…</option>';
+  gs.forEach(g=>g.items.sort((a,b)=>a.n.localeCompare(b.n,'zh')));
+  return gs;
+}
+/* 下拉内容只拼一次，之后按当前归属补 selected，避免每行重复生成上百个选项 */
+function buildAssignBase(){
+  return '<option value="">未归类</option>' + canonGroups().map(g=>
+    `<optgroup label="${esc(g.lab+' · '+g.cat)}">`+
+    g.items.map(o=>`<option value="${esc(o.k)}">${esc(o.n)}</option>`).join('')+'</optgroup>'
+  ).join('') + '<option value="__custom">＋自定义…</option>';
+}
+/* 手动补录只能选标准指标（不带“未归类/自定义”） */
+function metricOptions(cur){
+  return assignOptions(cur||'').replace('<option value="">未归类</option>','')
+    .replace('<option value="__custom">＋自定义…</option>','');
 }
 function assignOptions(cur){
   if(!ASSIGN_BASE) ASSIGN_BASE=buildAssignBase();
@@ -3212,7 +3246,7 @@ function confirmImport(){
   document.getElementById('impFile').value='';
   document.getElementById('impList').innerHTML='';
   document.getElementById('impState').textContent='';
-  drawChart(); renderRpt(); renderHome(); renderVisit();
+  drawChart(); renderRpt(); renderHome(); renderVisit(); renderGoals();
   toast(`已记录 ${msg.join('、')}`);
 }
 
@@ -3397,7 +3431,7 @@ function go(p,el){
   // 固定操作条只在指标页显示，切到别的页收起来
   const ib=document.getElementById('impActions');
   if(ib) ib.style.display=(p==='chart'||!ib.classList.contains('fixed'))?'':'none';
-  if(p==='chart'){ initTrendSel(); renderSeg(); drawChart(); setTimeout(()=>chart&&chart.resize(),50); }
+  if(p==='chart'){ initTrendSel(); renderSeg(); drawChart(); renderGoals(); setTimeout(()=>chart&&chart.resize(),50); }
   if(p==='visit') renderVisit();
   if(p==='log') renderRpt();
 }
@@ -3493,15 +3527,16 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.7.0 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.7.1 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
   document.getElementById('labDate').value=today();
-  document.getElementById('labKey').innerHTML=ORDER.map(k=>`<option value="${k}">${META[k].n}</option>`).join('');
   await bootstrapData();
+  // 指标字典就绪后再填手动补录的下拉（按化验类型/归类/标准名分组）
+  document.getElementById('labKey').innerHTML=metricOptions('crea');
   // 图表库可能还在下载（首次约 1MB），先渲染不依赖图表的页面，避免整页空白
-  renderRpt(); renderKnow(); initImport();
+  renderRpt(); renderKnow(); initImport(); renderGoals();
   if(window.__echartsReady) await window.__echartsReady;
   renderHome();
   restorePage();
