@@ -1010,10 +1010,17 @@ function recentBadKeys(m,n){
   });
   return out;
 }
+/* 趋势图可展示的指标：内置指标 + 字典标准指标中已经有数值记录的 */
+function chartMetricKeys(){
+  const ks=new Set(ORDER);
+  Object.keys(META).forEach(k=>ks.add(k));
+  DICTBYKEY.forEach((_,k)=>ks.add(k));
+  return [...ks].filter(k=>seriesOf(k).length);
+}
 /* 默认展示：最近 3 次记录中有不达标的标准指标 */
 function trendDefaultKeys(){
   const bad=recentBadKeys();
-  return ORDER.filter(k=>META[k]&&seriesOf(k).length&&bad.has(k));
+  return chartMetricKeys().filter(k=>bad.has(k));
 }
 function initTrendSel(){
   if(selInited) return;
@@ -1025,24 +1032,25 @@ function segChip(k,bad){
   const on=selKeys.includes(k);
   const c=on?colorOf(k):'#cfd8e0';
   const hit=bad&&bad.has(k);
+  const nm=metaOf(k).n;
   const badge=hit?'<span class="seg-badge">异常</span>':'';
   return `<button class="${on?'on':''}" onclick="toggleKey('${k}')"
-    title="${esc(META[k].n)}${hit?' · 最近 3 次记录中有不达标':''}">
-    <span class="sw" style="background:${c}"></span>${esc(META[k].n.replace(/[（(].*?[)）]/,''))}${badge}</button>`;
+    title="${esc(nm)}${hit?' · 最近 3 次记录中有不达标':''}">
+    <span class="sw" style="background:${c}"></span>${esc(nm.replace(/[（(].*?[)）]/,''))}${badge}</button>`;
 }
 function renderSeg(){
   const bad=recentBadKeys();
   const box=document.getElementById('segBox');
   if(!box) return;
   // 顶部只放已选指标，默认可视化压力小；其余指标收进「＋」
-  const picked=selKeys.filter(k=>META[k]).map(k=>segChip(k,bad)).join('');
+  const picked=selKeys.map(k=>segChip(k,bad)).join('');
   box.innerHTML=picked+
     `<button class="seg-add" onclick="toggleSegMore()" title="${segMoreOpen?'收起指标':'更多指标'}">${segMoreOpen?'×':'＋'}</button>`;
   const more=document.getElementById('segMore');
   if(more){
-    const has=k=>META[k]&&seriesOf(k).length;
-    const b=ORDER.filter(k=>has(k)&&bad.has(k));
-    const g=ORDER.filter(k=>has(k)&&!bad.has(k));
+    const all=chartMetricKeys();
+    const b=all.filter(k=>bad.has(k));
+    const g=all.filter(k=>!bad.has(k));
     const grp=(lb,ks)=>`<div class="grp"><span class="lb">${lb}</span>${
       ks.map(k=>segChip(k,bad)).join('')||'<span class="lb">无</span>'}</div>`;
     more.innerHTML=grp(`最近 3 次有异常 <b>${b.length}</b> 项`,b)
@@ -1056,7 +1064,7 @@ function toggleSegMore(){ segMoreOpen=!segMoreOpen; renderSeg(); }
 function toggleKey(k){
   const i=selKeys.indexOf(k);
   if(i>=0){ selKeys.splice(i,1); }
-  else{ if(selKeys.length>=6) return toast('最多同时对比 6 个指标'); selKeys.push(k); }
+  else selKeys.push(k);
   renderSeg(); drawChart();
 }
 function clearSel(){ selKeys=[]; renderSeg(); drawChart(); toast('已清空，用 ＋ 选择指标'); }
@@ -1105,7 +1113,7 @@ function renderGoals(){
 }
 
 function drawChart(){
-  const keys=selKeys.filter(k=>META[k]);
+  const keys=selKeys.filter(k=>seriesOf(k).length);
   if(!keys.length){
     if(chart){ chart.clear(); }
     const an=document.getElementById('axisNote'); if(an) an.classList.remove('on');
@@ -1149,14 +1157,14 @@ function drawChart(){
   const normed=useNorm? aligned.map(a=>norm(a)) : null;
 
   const series=keys.map((k,i)=>{
-    const m=META[k], c=COLORS[i%COLORS.length];
+    const m=metaOf(k), c=COLORS[i%COLORS.length];
     const data = useNorm? normed[i].data : aligned[i];
     const s={
       name:m.n, type:'line', data, smooth:.25, symbolSize:6, connectNulls:true,
       lineStyle:{width:2.5,color:c},
       itemStyle:{color:c,borderColor:'#fff',borderWidth:1.5},
       emphasis:{focus:'series'},
-      label:{show:true,fontSize:9,color:c,position:'top',
+      label:{show:keys.length<=4,fontSize:9,color:c,position:'top',
         formatter:p=>{
           const rv = useNorm? (seriesOf(k).find(x=>x.date===dates[p.dataIndex])||{}).v : p.value;
           return rv==null?'':fmt(rv);
@@ -1179,9 +1187,9 @@ function drawChart(){
       splitLine:{lineStyle:{color:'#f0f4f7'}},name:'相对变化',nameTextStyle:{fontSize:9,color:'#8899a6'}};
   }else if(useDual){
     yAxis=[
-      {type:'value',scale:true,name:META[keys[0]].u,nameTextStyle:{fontSize:9,color:COLORS[0]},
+      {type:'value',scale:true,name:metaOf(keys[0]).u,nameTextStyle:{fontSize:9,color:COLORS[0]},
        axisLabel:{fontSize:9.5,color:COLORS[0]},splitLine:{lineStyle:{color:'#f0f4f7'}}},
-      {type:'value',scale:true,name:META[keys[1]].u,nameTextStyle:{fontSize:9,color:COLORS[1]},
+      {type:'value',scale:true,name:metaOf(keys[1]).u,nameTextStyle:{fontSize:9,color:COLORS[1]},
        axisLabel:{fontSize:9.5,color:COLORS[1]},splitLine:{show:false}}
     ];
   }else{
@@ -1193,8 +1201,8 @@ function drawChart(){
   chart.setOption({
     color:COLORS,
     grid:{left:useNorm?44:50,right:(useDual||useNorm)?50:18,top:multi?46:26,bottom:34,containLabel:false},
-    legend: multi? {show:true,top:0,left:'center',itemWidth:14,itemHeight:8,
-      textStyle:{fontSize:10.5,color:'#5b6b7a'},data:keys.map(k=>META[k].n)} : {show:false},
+    legend: (multi&&keys.length<=6)? {show:true,top:0,left:'center',itemWidth:14,itemHeight:8,
+      textStyle:{fontSize:10.5,color:'#5b6b7a'},data:keys.map(k=>metaOf(k).n)} : {show:false},
     tooltip:{
       trigger:'axis',
       confine:true,
@@ -1203,7 +1211,7 @@ function drawChart(){
         const real=dates.find(x=>x.slice(5)===d)||dates[ps[0].dataIndex];
         let rows=ps.map(p=>{
           const k=keys[p.seriesIndex];
-          const m=META[k];
+          const m=metaOf(k);
           const rv=seriesOf(k).find(x=>x.date===real);
           if(!rv) return '';
           return `<div style="margin-top:3px">${p.marker}<b>${fmt(rv.v)}</b> ${m.u} · ${m.n}</div>`;
@@ -1226,12 +1234,12 @@ function drawChart(){
       `用于观察<b>变化趋势是否同步</b>。<br>图上标注与悬停提示均为<b>真实数值</b>。` +
       `<br>范围：` + keys.map((k,i)=>{
         const n=normed[i];
-        return `<span style="color:${COLORS[i%COLORS.length]}">●</span> ${META[k].n} ${n.empty?'无数据':n.raw.lo+'~'+n.raw.hi}`;
+        return `<span style="color:${COLORS[i%COLORS.length]}">●</span> ${metaOf(k).n} ${n.empty?'无数据':n.raw.lo+'~'+n.raw.hi}`;
       }).join('；');
   }else if(useDual){
     note.className='axis-note on';
-    note.innerHTML=`<b>双轴模式</b>：<span style="color:${COLORS[0]}">■ 左轴</span> ${META[keys[0]].n}（${META[keys[0]].u}）；
-      <span style="color:${COLORS[1]}">■ 右轴</span> ${META[keys[1]].n}（${META[keys[1]].u}）`;
+    note.innerHTML=`<b>双轴模式</b>：<span style="color:${COLORS[0]}">■ 左轴</span> ${metaOf(keys[0]).n}（${metaOf(keys[0]).u}）；
+      <span style="color:${COLORS[1]}">■ 右轴</span> ${metaOf(keys[1]).n}（${metaOf(keys[1]).u}）`;
   }else{
     note.className='axis-note';
     note.innerHTML='';
@@ -1239,8 +1247,8 @@ function drawChart(){
 
   const total=dates.length;
   document.getElementById('chartTip').innerHTML = multi
-    ? `共 ${total} 个时间点 · 已选 ${keys.length} 项：${keys.map(k=>META[k].n).join('、')}`
-    : `共 ${total} 次记录 · ${META[keys[0]].n}（${META[keys[0]].u}）· 目标：${META[keys[0]].goal}`;
+    ? `共 ${total} 个时间点 · 已选 ${keys.length} 项：${keys.map(k=>metaOf(k).n).join('、')}`
+    : `共 ${total} 次记录 · ${metaOf(keys[0]).n}（${metaOf(keys[0]).u}）· 目标：${metaOf(keys[0]).goal||'未设目标'}`;
 
 }
 function addLab(){
@@ -2524,6 +2532,8 @@ const labRank=l=>{ const i=LAB_ORDER.indexOf(l); return i<0?99:i; };
 /* 有效规范键：内置/自定义指标，或字典里已标准化的指标（不一定要进趋势图） */
 const isCanonKey=k=>!!k&&(!!META[k]||DICTBYKEY.has(k));
 const canonLabel=k=>{ const d=DICTBYKEY.get(k); return d?d.n:((META[k]&&META[k].n)||k); };
+/* 图表等处取指标名/单位：优先内置定义（有参考区间），否则用字典 */
+const metaOf=k=>META[k]||{n:((DICTBYKEY.get(k)||{}).n)||k,u:((DICTBYKEY.get(k)||{}).u)||'',goal:'',ref:null};
 function setDict(rows){
   DICT=[]; DICTBYKEY.clear(); ASSIGN_BASE='';
   const seen=new Set();
@@ -3429,7 +3439,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.7.8 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.7.9 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
