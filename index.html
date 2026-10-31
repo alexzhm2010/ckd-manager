@@ -2393,8 +2393,10 @@ function countOrphanArrows(text){
 /* ---------- 记录页：整份化验报告，逐项可编辑 ---------- */
 let rptShow={};        // 某份报告是否展开；默认全部折叠，只露日期/医院/科室
 let rptQ='';           // 按指标名称筛选
+let rptMoreOpen=false; // 第 10 份之后的历史报告是否展开
 
 function toggleRptShow(d){ rptShow[d]=!rptShow[d]; renderRpt(); }
+function toggleRptMore(){ rptMoreOpen=!rptMoreOpen; renderRpt(); }
 function rptSearch(v){ rptQ=String(v||'').trim(); renderRpt(); }
 function rptClearQ(){ const el=document.getElementById('rptQ'); if(el) el.value=''; rptSearch(''); }
 
@@ -2451,7 +2453,7 @@ function renderRpt(){
     return;
   }
   // 每份报告都是一张可折叠卡片：默认只露日期/医院/科室，展开后显示全部指标
-  const html=dates.map(d=>{
+  const card=d=>{
     const items=rptItems(d);
     const matched=q.length?items.filter(qMatch):items;
     if(q.length&&!matched.length) return '';
@@ -2478,7 +2480,24 @@ function renderRpt(){
       ${who?`<div class="rpt-sub">🏥 ${esc(who)}${rm.specimen?` · 标本 ${esc(rm.specimen)}`:''}</div>`:''}
       ${shown?`<div class="rpt-row hd"><span>指标</span><span>结果</span><span>单位</span><span>参考范围</span></div>`+vis.map(i=>rptRow(items[i])).join(''):''}
     </div>`;
-  }).join('');
+  };
+  let html;
+  if(q.length){
+    // 搜索时跨全部报告，只展示有匹配项的报告
+    html=dates.map(card).join('');
+  }else{
+    // 默认只展示最近 10 份；更早的报告按时间倒序折叠，点开才显示
+    const tail=dates.slice(10);
+    html=dates.slice(0,10).map(card).join('');
+    if(tail.length){
+      html+=`<div style="text-align:center;margin:16px 0">
+        <button class="mini" onclick="toggleRptMore()">${rptMoreOpen
+          ?'收起更早的报告'
+          :`更早的报告 ${tail.length} 份 ＋`}</button>
+      </div>`;
+      if(rptMoreOpen) html+=tail.map(card).join('');
+    }
+  }
   el.innerHTML=html;
 }
 
@@ -3558,7 +3577,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.9.4 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.9.5 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
