@@ -230,6 +230,9 @@ nav div.on{color:var(--pri2);font-weight:600}
 .list-item:last-child{border-bottom:none}
 .list-item .dt{color:var(--muted);font-size:12px;flex:0 0 74px;padding-top:1px}
 .badge{display:inline-block;font-size:11px;padding:1px 7px;border-radius:7px;background:#eef4f8;color:var(--pri);margin-left:4px}
+/* 复查周期下拉：按分类维护，随账号持久化 */
+.rv-sel{border:1px solid #dbe3ea;background:#fff;border-radius:9px;font-size:11px;
+padding:1px 3px;color:var(--pri);font-family:inherit;vertical-align:1px}
 /* 复查分组 */
 .vg{padding:11px 0;border-bottom:1px solid var(--line)}
 .vg:last-child{border-bottom:none;padding-bottom:0}
@@ -393,7 +396,7 @@ border-radius:50%;animation:spin .85s linear infinite}
     <button class="btn" onclick="addVisit()">保存复查安排</button>
   </div>
   <div class="card">
-    <h2><span class="t"><span class="bar"></span>按大类复查状态</span><span class="muted">按上次检查日期估算</span></h2>
+    <h2><span class="t"><span class="bar"></span>按大类复查状态</span><span class="muted">周期可调，按上次检查日期估算</span></h2>
     <div id="checkGroups"></div>
   </div>
   <div class="card">
@@ -463,7 +466,7 @@ border-radius:50%;animation:spin .85s linear infinite}
 const KEY='kidney_mgr_v1';
 let FACTS_READY=false;      // 等下面的表结构和 META 都就绪后，save 才写 facts
 const DEFAULT={
-  logs:[], meds:{}, visits:[], labs:{}, syms:{}, abn:{}, rpt:{}, metrics:{}
+  logs:[], meds:{}, visits:[], labs:{}, syms:{}, abn:{}, rpt:{}, metrics:{}, review:{}
 };
 /* 数据只存云端：启动时从 facts 表拉取，浏览器里不保留任何数据 */
 function load(){ return JSON.parse(JSON.stringify(DEFAULT)); }
@@ -511,17 +514,17 @@ const MEDS=[
    化验项目按临床大类归拢，按「上次检查日期」判断整组是否该复查；
    组内个别指标周期更短（如血钾），单独给出待补提醒。 */
 const CHECK_GROUPS=[
- {id:'renal',n:'生化 · 肝肾功能与电解质',f:'每月',days:30,keys:['crea','urea','ua','k','egfr','cysc','hco3']},
- {id:'urine',n:'尿常规 · 尿蛋白',f:'每 1-2 月',days:45,keys:['upro','acr','malb']},
- {id:'blood',n:'血常规',f:'每 3 月',days:90,keys:['hgb','alb']},
- {id:'bone',n:'骨代谢 · 钙磷 PTH',f:'每 3 月',days:90,keys:['ca','p','pth']},
- {id:'lipid',n:'血脂',f:'每 3-6 月',days:120,keys:['tc','tg','ldl']},
+ {id:'renal',n:'生化 · 肝肾功能与电解质',days:30,keys:['crea','urea','ua','k','egfr','cysc','hco3']},
+ {id:'urine',n:'尿常规 · 尿蛋白',days:45,keys:['upro','acr','malb']},
+ {id:'blood',n:'血常规',days:90,keys:['hgb','alb']},
+ {id:'bone',n:'骨代谢 · 钙磷 PTH',days:90,keys:['ca','p','pth']},
+ {id:'lipid',n:'血脂',days:120,keys:['tc','tg','ldl']},
 ];
 const CHECK_MANUAL=[
- {n:'糖代谢（空腹血糖 / 糖化血红蛋白）',f:'每 3 月'},
- {n:'甲状腺超声（4B 结节）',f:'3-6 月'},
- {n:'心脏彩超',f:'每 6-12 月'},
- {n:'肾脏超声',f:'每 6-12 月'},
+ {id:'m_glu',n:'糖代谢（空腹血糖 / 糖化血红蛋白）',days:90},
+ {id:'m_thyroid',n:'甲状腺超声（4B 结节）',days:180},
+ {id:'m_echo',n:'心脏彩超',days:365},
+ {id:'m_kidneyus',n:'肾脏超声',days:365},
 ];
 // 组内周期短于整组的指标：单独按自己的周期提醒
 const KEY_DAYS={k:30,ua:60};
@@ -600,7 +603,7 @@ function deriveFacts(db,touch){
     return touch?now:(prev.updated_at||1);
   };
 
-  [['logs',db.logs||[]],['meds',db.meds||{}],['visits',db.visits||[]],['syms',db.syms||{}],['metrics',db.metrics||{}]].forEach(([k,v])=>{
+  [['logs',db.logs||[]],['meds',db.meds||{}],['visits',db.visits||[]],['syms',db.syms||{}],['metrics',db.metrics||{}],['review',db.review||{}]].forEach(([k,v])=>{
     const uid='block|'+k;
     const prev=FACTMAP.get(uid);
     const changed=!prev||JSON.stringify((prev.meta||{}).data)!==JSON.stringify(v);
@@ -3259,19 +3262,52 @@ function clearImp(){
 }
 
 /* ==================== 复查页 ==================== */
+/* 复查周期：按分类维护，存在 facts 的 block|review 行里（跟账号同步，换设备仍保留）；
+   没有自定义值时用 CHECK_GROUPS / CHECK_MANUAL 里的默认天数 */
+const REV_OPTS=[0,14,30,45,60,90,120,180,365];
+const REV_LABEL={14:'每 2 周',30:'每月',45:'每 1.5 月',60:'每 2 月',90:'每 3 月',120:'每 4 月',180:'每 6 月',365:'每年'};
+const revLabel=d=>!d?'按需':(REV_LABEL[d]||`每 ${d} 天`);
+function reviewDays(id,def){
+  const v=(DB.review||{})[id];
+  return (typeof v==='number'&&isFinite(v))?v:def;
+}
+function reviewSelect(id,def){
+  const cur=reviewDays(id,def);
+  const opts=REV_OPTS.slice();
+  if(!opts.includes(cur)){ opts.push(cur); opts.sort((a,b)=>a-b); }
+  return `<select class="rv-sel" onchange="setReview('${id}',this.value,${def})">`+
+    opts.map(d=>`<option value="${d}"${d===cur?' selected':''}>${revLabel(d)}</option>`).join('')+'</select>';
+}
+function setReview(id,v,def){
+  const d=Number(v); if(!isFinite(d)) return;
+  DB.review=DB.review||{};
+  if(d===Number(def)) delete DB.review[id]; else DB.review[id]=d;
+  save(); renderVisit(); renderHome();
+  toast('复查周期已更新');
+}
+/* 供后续自动化复查提醒使用：当前周期、最近一次记录、是否超期 */
+function reviewPlan(){
+  return CHECK_GROUPS.map(g=>{
+    const s=groupInfo(g);
+    return {id:g.id,n:g.n,days:reviewDays(g.id,g.days),last:s.lastDate,
+      overdue:s.st==='over',keys:g.keys};
+  });
+}
+
 /* 分组的检查状态：整组按最晚一次检查算，组内指标按自己的周期算 */
 function groupInfo(g){
   let lastDate='', lastK='';
+  const gd=reviewDays(g.id,g.days);      // 用户在复查页调整后的周期
   const items=g.keys.map(k=>{
     const l=last(k);
     const days=l?daysBetween(l.date,today()):null;
     if(l&&l.date>lastDate){ lastDate=l.date; lastK=k; }
-    const max=KEY_DAYS[k]||g.days;
+    const max=KEY_DAYS[k]||gd;
     return {k,n:(META[k]&&META[k].n)||k,last:l?l.date:'',days,max,stale:days!=null&&days>max};
   });
   const days=lastDate?daysBetween(lastDate,today()):null;
-  const st=days==null?'none':(days>g.days?'over':(days>g.days*0.75?'near':'ok'));
-  return {g,items,lastDate,lastK,days,st};
+  const st=days==null?'none':(days>gd?'over':(days>gd*0.75?'near':'ok'));
+  return {g,gdays:gd,items,lastDate,lastK,days,st};
 }
 function visitBadge(st,days){
   if(st==='none') return '<span class="badge">待记录</span>';
@@ -3298,7 +3334,7 @@ function renderVisit(){
     }).join('');
     return `<div class="vg">
       <div class="vg-hd"><b>${g.n}</b>${visitBadge(s.st,s.days)}</div>
-      <div class="vg-meta">建议 ${g.f}${s.lastDate?` · 最近 ${s.lastDate}（${(META[s.lastK]&&META[s.lastK].n)||s.lastK}）`:' · 暂无记录'}</div>
+      <div class="vg-meta">建议 ${reviewSelect(g.id,g.days)}${s.lastDate?` · 最近 ${s.lastDate}（${(META[s.lastK]&&META[s.lastK].n)||s.lastK}）`:' · 暂无记录'}</div>
       <div class="vg-keys">${chips}</div>
     </div>`;
   }).join('');
@@ -3316,7 +3352,8 @@ function renderVisit(){
     : '<div class="empty">组内各项均在建议周期内 ✅</div>';
 
   document.getElementById('checkManual').innerHTML=CHECK_MANUAL.map(c=>
-    `<div class="list-item"><div class="dt">${c.f}</div><div>${c.n}</div></div>`).join('');
+    `<div class="list-item"><div class="dt">建议</div><div style="flex:1">${c.n}
+      <div style="margin-top:3px">${reviewSelect(c.id,c.days)}</div></div></div>`).join('');
 
   document.getElementById('qList').innerHTML=QUESTIONS.map(q=>`<div class="list-item"><div class="dt">💬</div><div>${q}</div></div>`).join('');
 }
@@ -3446,7 +3483,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.8.2 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.8.4 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
