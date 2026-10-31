@@ -1060,8 +1060,9 @@ function renderSeg(){
   canonGroups().forEach((g,gi)=>{
     const items=g.items.filter(o=>avail.has(o.k));
     if(!items.length) return;
-    // 已选中的指标即使不在异常组里也保持可见，避免选完就找不到
-    const vis=items.filter(o=>bad.has(o.k)||selKeys.includes(o.k));
+    // 已选中的指标即使不在异常组里也保持可见，避免选完就找不到；
+    // 尿酸是长期重点监测项，近三次正常时也常驻显示
+    const vis=items.filter(o=>bad.has(o.k)||selKeys.includes(o.k)||o.k==='ua');
     const rec={g,gi,items,vis,rest:items.filter(o=>!vis.includes(o))};
     (vis.length?main:other).push(rec);
   });
@@ -3553,7 +3554,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.9.1 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.9.2 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
