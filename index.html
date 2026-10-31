@@ -211,7 +211,6 @@ border-radius:8px;background:#f7fafc;color:#7b8794;font-family:inherit;outline:n
 .rpt-hd .b{font-size:12.5px;font-weight:700;flex:0 0 auto}
 .rpt-hd .s{font-size:11.5px;color:#7b8794;flex:1;min-width:0}
 .rpt-hd .ops{flex:0 0 auto;display:flex;gap:5px}
-.rpt-del{padding:2px 9px;font-size:11px;color:#d93a3a;border-color:#f0cfcf}
 .rpt-sub{font-size:10.5px;color:#7b8794;margin:0 0 6px}
 .rpt-row{padding:5px 0;border-bottom:1px dotted #eceff3}
 .rpt-row .l1{display:flex;gap:6px;align-items:center}
@@ -2447,7 +2446,6 @@ function renderRpt(){
           :`${items.length} 项${abn.length?` · ${abn.length} 项异常`:' · 全部在参考范围'}`}</span>
         <div class="ops">
           ${!q.length?`<button class="mini" onclick="toggleRptShow('${d}')">${shown?'收起':'展开'}</button>`:''}
-          <button class="mini rpt-del" onclick="delRpt('${d}')" title="删除这份报告">删除</button>
         </div>
       </div>
       ${who?`<div class="rpt-sub">🏥 ${esc(who)}${rm.specimen?` · 标本 ${esc(rm.specimen)}`:''}</div>`:''}
@@ -2455,22 +2453,6 @@ function renderRpt(){
     </div>`;
   }).join('');
   el.innerHTML=html;
-}
-
-/* 删除某一天的整份报告：报告项目 + 由它产生的趋势值与日志一起清掉
-   （那天手动补录、且不在这份报告里的指标不动） */
-function delRpt(d){
-  if(!confirm(`删除 ${d} 的整份报告？\n这一天的报告项目和对应趋势数据会一起删除，无法恢复。`)) return;
-  const keys=new Set(rptItems(d).map(it=>canonOf(it)).filter(k=>k&&META[k]));
-  if(DB.rpt&&DB.rpt[d]!=null) delete DB.rpt[d];
-  if(DB.labs&&DB.labs[d]){
-    keys.forEach(k=>{ delete DB.labs[d][k]; });
-    if(!Object.keys(DB.labs[d]).length) delete DB.labs[d];
-  }
-  DB.logs=(DB.logs||[]).filter(l=>!(l.type==='lab'&&l.date===d&&keys.has(l.key)));
-  delete rptShow[d];
-  save(); renderRpt(); renderHome(); drawChart(); renderVisit();
-  toast('已删除该报告');
 }
 
 /* 从文本里找检查日期 */
@@ -3541,7 +3523,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.7.5 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.7.6 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
