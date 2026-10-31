@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>肾病健康管理平台</title>
+<title>个人健康管理平台</title>
 <script>
 /* 图表库异步加载：同步引用会在大文件慢下载时把整页卡成白屏 */
 window.__echartsReady=new Promise(function(res){
@@ -276,7 +276,7 @@ border-radius:50%;animation:spin .85s linear infinite}
   <div id="bootBox" class="boot" style="display:none"><div class="spin"></div><div class="t" id="bootTxt">正在加载数据…</div></div>
   <div class="login-card" id="loginCard">
     <div class="login-logo">🩺</div>
-    <h2>肾病健康管理平台</h2>
+    <h2>个人健康管理平台</h2>
     <div id="cloudLogin">
       <div class="hint">数据只存在云端，本机不保存。邮箱会记住，每次使用都需要输入密码</div>
       <input type="email" id="cloudEmail" placeholder="邮箱（会记住）" autocomplete="off" inputmode="email" style="letter-spacing:0;font-size:15px">
@@ -291,7 +291,7 @@ border-radius:50%;animation:spin .85s linear infinite}
   </div>
 </div>
 <header>
-  <h1>🩺 肾病健康管理平台</h1>
+  <h1>🩺 个人健康管理平台</h1>
   <div class="sub" id="appVer">v—</div>
 </header>
 <div class="app">
@@ -3541,7 +3541,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.7.4 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.7.5 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
