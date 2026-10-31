@@ -650,11 +650,15 @@ function deriveFacts(db,touch){
         (prev.unit||'')!==(it.u||'')||prev.ref_lo!==lo||prev.ref_hi!==hi||
         (prev.canon||'')!==canon||
         (prev.flag||null)!==(it.st||null)||(prev.raw==null?null:prev.raw)!==(it.raw==null?null:Number(it.raw));
+      const meta={ord:i};
+      if(it.lab) meta.lab_type=it.lab;
+      if(it.cat) meta.category=it.cat;
+      if(it.rn) meta.raw_name=it.rn;
       rows.push({
         uid, kind:'rpt', date, canon, name:it.n, value:it.v, unit:it.u||'',
         ref_lo:lo, ref_hi:hi, flag:it.st||null,
         raw:it.raw==null?null:Number(it.raw),
-        meta:{ord:i},
+        meta,
         source:prev&&!changed?(prev.source||'import'):'import',
         updated_at:stamp(prev,changed), created_at:prev?prev.created_at:at
       });
@@ -698,7 +702,11 @@ function applyFacts(rows){
     }else if(r.kind==='rpt'&&r.date){
       const it={n:r.name,v:r.value,u:r.unit||'',lo:r.ref_lo,hi:r.ref_hi,st:r.flag||undefined};
       if(r.raw!=null) it.raw=r.raw;
-      if(r.canon&&META[r.canon]) it.cn=r.canon;   // 只保留真正的规范指标 key
+      // 保留数据库里清洗/归类后的信息，避免任何一次保存把它们覆盖掉
+      if(r.canon) it.cn=r.canon;
+      if(r.meta&&r.meta.lab_type) it.lab=r.meta.lab_type;
+      if(r.meta&&r.meta.category) it.cat=r.meta.category;
+      if(r.meta&&r.meta.raw_name) it.rn=r.meta.raw_name;
       (rptBox[r.date]=rptBox[r.date]||[]).push({it,ord:(r.meta&&r.meta.ord)||0});
     }else if(r.kind==='rptmeta'&&r.date){
       metaBox[r.date]=r.meta&&r.meta.info?r.meta.info:{};
@@ -2527,7 +2535,8 @@ function resolveCanon(n){
 /* 一项的规范键：核对时指定的归属 > 学到的别名 > 静态别名 > 归一化名称（未归类） */
 const canonOf=x=>{
   if(!x) return '';
-  if(x.cn&&META[x.cn]) return x.cn;
+  // 数据库已归一的规范键直接采用（包含未在 META 中登记的标准指标）
+  if(x.cn) return x.cn;
   return resolveCanon(x.n)||normName(x.n);
 };
 /* 学习一条别名，并把档案里已有的同名报告项改成新归属（老数据立刻归并）。
@@ -3407,7 +3416,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.6.6 · 2026-10-30';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.6.7 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
