@@ -100,24 +100,26 @@ background:var(--pri2);color:#fff;cursor:pointer;width:100%;transition:.15s}
 /* ==== 图表 ==== */
 .chart{width:100%;height:230px}
 .mg-chips button{border:1px solid #dbe3ea;background:#fff;color:#5b6b7a;
-border-radius:20px;padding:6px 13px;font-size:12.5px;cursor:pointer;transition:.15s;font-family:inherit;
-max-width:100%;line-height:1.45;text-align:center}
+border-radius:14px;padding:3px 9px;font-size:11.5px;cursor:pointer;transition:.15s;font-family:inherit;
+max-width:100%;line-height:1.4;text-align:center}
 .mg-chips button.on{background:var(--pri2);border-color:var(--pri2);color:#fff;font-weight:600}
 .seg-ops{display:flex;justify-content:space-between;align-items:center;margin:-2px 0 8px;gap:10px}
 .mini{border:1px solid #dbe3ea;background:#fff;color:#7b8794;border-radius:14px;
 padding:3px 11px;font-size:11.5px;cursor:pointer;font-family:inherit;transition:.15s;white-space:nowrap}
 .mini:active{background:#eef4f8}
 /* 多选时每个指标带自己的色点 */
-.mg-chips button .sw{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;
+.mg-chips button .sw{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px;
 vertical-align:1px;border:1px solid rgba(0,0,0,.12)}
 /* 指标选择：按化验类型/归类分组；最近三次有不合格的直出，其余收起 */
-.mg-grp{margin-bottom:11px}
-.mg-t{font-size:11.5px;color:#2f6fb5;font-weight:600;margin-bottom:5px}
-.mg-chips{display:flex;flex-wrap:wrap;gap:6px}
+.mg-grp{margin-bottom:8px}
+.mg-t{display:flex;align-items:center;gap:8px;font-size:11.5px;color:#2f6fb5;font-weight:600;
+margin-bottom:4px;line-height:1.5}
+.mg-oth{margin-left:auto}
+.mg-chips{display:flex;flex-wrap:wrap;gap:5px}
 .mg-rest{margin-top:6px}
 .mg-none{font-size:11.5px;color:#a7b2be;padding:3px 1px}
-.mg-more{margin-top:5px}
-.mg-more .mini{margin-left:1px}
+.mg-other{margin-top:2px}
+.mg-sub{margin-top:9px;padding-left:8px;border-left:2px solid #eef2f6}
 /* 双轴提示条 */
 .axis-note{background:#f2f6f9;border-radius:10px;padding:7px 10px;font-size:11.5px;
 color:#51606f;margin-bottom:8px;line-height:1.55;display:none}
@@ -969,6 +971,7 @@ function toggleMed(k){
 let chart=null;
 let selKeys=[];                 // 当前选中的对比指标
 let segOpen={};                 // 各「化验类型 · 归类」的其余指标是否展开
+let segOtherOpen=false;         // 没有异常指标的分类是否展开
 let selInited=false;            // 首次进入指标页时按异常情况给默认选择
 const COLORS=['#1287b8','#e08b0a','#1a9e63','#a855c7','#d93a3a','#0f9ba8'];
 const colorOf=k=>COLORS[selKeys.indexOf(k)%COLORS.length];
@@ -1021,35 +1024,50 @@ function segChip(k){
   return `<button class="${on?'on':''}" onclick="toggleKey('${k}')"
     title="${esc(nm)}"><span class="sw" style="background:${c}"></span>${esc(nm.replace(/[（(].*?[)）]/,''))}</button>`;
 }
-/* 指标选择区：按化验类型/归类分组；最近 3 次有不合格的标签直出，其余收起 */
+/* 指标选择区：按化验类型/归类分组；最近 3 次有不合格的标签直出，其余收起；
+   没有需要展示指标的分类统一收进「其他分类」 */
 function renderSeg(){
   const bad=recentBadKeys();
   const box=document.getElementById('segBox');
   if(!box) return;
   const avail=new Set(chartMetricKeys());
-  let html='';
+  const main=[], other=[];
   canonGroups().forEach((g,gi)=>{
     const items=g.items.filter(o=>avail.has(o.k));
     if(!items.length) return;
     // 已选中的指标即使不在异常组里也保持可见，避免选完就找不到
     const vis=items.filter(o=>bad.has(o.k)||selKeys.includes(o.k));
-    const rest=items.filter(o=>!vis.includes(o));
-    html+=`<div class="mg-grp"><div class="mg-t">${esc(g.lab+' · '+g.cat)}</div>`;
-    html+=vis.length?`<div class="mg-chips">${vis.map(o=>segChip(o.k)).join('')}</div>`
-      :`<div class="mg-none">最近三次均正常</div>`;
-    if(rest.length){
-      const open=!!segOpen[gi];
-      html+=`<div class="mg-more"><button class="mini" onclick="toggleSegGroup(${gi})">${
-        open?'收起':'其他 '+rest.length+' 项 ＋'}</button>${
-        open?`<div class="mg-chips mg-rest">${rest.map(o=>segChip(o.k)).join('')}</div>`:''}</div>`;
-    }
+    const rec={g,gi,items,vis,rest:items.filter(o=>!vis.includes(o))};
+    (vis.length?main:other).push(rec);
+  });
+  let html='';
+  main.forEach(r=>{
+    const open=!!segOpen[r.gi];
+    html+=`<div class="mg-grp"><div class="mg-t">${esc(r.g.lab+' · '+r.g.cat)}`;
+    if(r.rest.length) html+=`<button class="mini mg-oth" onclick="toggleSegGroup(${r.gi})">${
+      open?'收起':'其他 '+r.rest.length+' 项 ＋'}</button>`;
+    html+=`</div><div class="mg-chips">${r.vis.map(o=>segChip(o.k)).join('')}</div>`;
+    if(r.rest.length&&open) html+=`<div class="mg-chips mg-rest">${r.rest.map(o=>segChip(o.k)).join('')}</div>`;
     html+='</div>';
   });
+  if(other.length){
+    const total=other.reduce((n,r)=>n+r.items.length,0);
+    html+=`<div class="mg-other"><button class="mini" onclick="toggleSegOther()">${
+      segOtherOpen?'收起其他分类':'其他分类 '+other.length+' 类 / '+total+' 项 ＋'}</button>`;
+    if(segOtherOpen){
+      other.forEach(r=>{
+        html+=`<div class="mg-grp mg-sub"><div class="mg-t">${esc(r.g.lab+' · '+r.g.cat)}</div>
+          <div class="mg-chips">${r.items.map(o=>segChip(o.k)).join('')}</div></div>`;
+      });
+    }
+    html+='</div>';
+  }
   box.innerHTML=html||'<div class="mg-none">还没有可展示的指标</div>';
   const cnt=document.getElementById('selCount');
   if(cnt) cnt.textContent=selKeys.length?`已选 ${selKeys.length} 项`:'未选指标';
 }
 function toggleSegGroup(g){ segOpen[g]=!segOpen[g]; renderSeg(); }
+function toggleSegOther(){ segOtherOpen=!segOtherOpen; renderSeg(); }
 function toggleKey(k){
   const i=selKeys.indexOf(k);
   if(i>=0){ selKeys.splice(i,1); }
@@ -3428,7 +3446,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.8.0 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.8.1 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
