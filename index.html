@@ -246,6 +246,14 @@ padding:2px 7px;color:#51606f;white-space:nowrap}
 .vg-key b{font-weight:600;color:var(--txt)}
 .vg-key.stale{background:#fdf3e3;border-color:#f4d7a6;color:#a06a12}
 .vg-key.stale b{color:#a06a12}
+.vg-key.bad{background:#fdeaea;border-color:#f2c2c2;color:#c23b3b}
+.vg-key.bad b{color:#c23b3b}
+.vg-key.over3{background:#fdeaea;border-color:#e9a3a3;color:#b32222}
+.vg-key.over3 b{color:#b32222}
+.vg-abn{font-size:10.5px;color:#c23b3b;background:#fdeaea;border-radius:7px;padding:1px 6px;
+margin-left:6px;font-weight:600;white-space:nowrap}
+.vg-cnt{font-size:10.5px;color:#a7b2be;margin-top:5px}
+.vg-none{font-size:11.5px;color:#a7b2be}
 .toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%) translateY(14px);background:rgba(31,45,61,.93);
 color:#fff;padding:10px 20px;border-radius:22px;font-size:13.5px;opacity:0;transition:.25s;z-index:99;pointer-events:none}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
@@ -387,7 +395,11 @@ border-radius:50%;animation:spin .85s linear infinite}
 <!-- ============ 复查 ============ -->
 <section class="page" id="p-visit">
   <div class="card">
-    <h2><span class="t"><span class="bar"></span>按大类复查状态</span><span class="muted">周期可调，按上次检查日期估算</span></h2>
+    <h2><span class="t"><span class="bar"></span>重点跟踪</span><span class="muted">近三次异常 · 超期 3 倍</span></h2>
+    <div id="checkFocus"></div>
+  </div>
+  <div class="card">
+    <h2><span class="t"><span class="bar"></span>其他分类</span><span id="revOtherBtn"></span></h2>
     <div id="checkGroups"></div>
   </div>
   <div class="card">
@@ -502,23 +514,35 @@ const MEDS=[
 ];
 
 /* ==================== 复查分组 ====================
-   化验项目按临床大类归拢，按「上次检查日期」判断整组是否该复查；
-   组内个别指标周期更短（如血钾），单独给出待补提醒。 */
+   覆盖 rpt_dict 的全部化验类型/归类；指标集合从字典动态取，
+   新导入的指标会自动归入对应大类，不用再手工维护清单。
+   整组按「上次检查日期」估算复查状态；近三次有异常的指标/大类进入重点跟踪，
+   即使一直正常，超出建议周期 3 倍也会醒目提醒。 */
 const CHECK_GROUPS=[
- {id:'renal',n:'生化 · 肝肾功能与电解质',days:30,keys:['crea','urea','ua','k','egfr','cysc','hco3']},
- {id:'urine',n:'尿常规 · 尿蛋白',days:45,keys:['upro','acr','malb']},
- {id:'blood',n:'血常规',days:90,keys:['hgb','alb']},
- {id:'bone',n:'骨代谢 · 钙磷 PTH',days:90,keys:['ca','p','pth']},
- {id:'lipid',n:'血脂',days:120,keys:['tc','tg','ldl']},
+ {id:'renal',n:'生化 · 肾功能与尿蛋白',days:30,labs:[['生化','肾功能与尿蛋白']]},
+ {id:'bone', n:'生化 · 电解质与骨代谢',days:30,labs:[['生化','电解质与骨代谢']]},
+ {id:'liver',n:'生化 · 肝功能',days:90,labs:[['生化','肝功能']]},
+ {id:'glu',  n:'生化 · 糖代谢',days:90,labs:[['生化','糖代谢']]},
+ {id:'lipid',n:'生化 · 血脂',days:120,labs:[['生化','血脂']]},
+ {id:'enzyme',n:'生化 · 心肌酶',days:180,labs:[['生化','心肌酶']]},
+ {id:'blood',n:'血常规',days:90,labs:[['血常规','血细胞']]},
+ {id:'urine',n:'尿常规',days:90,labs:[['尿常规','尿液干化学'],['尿常规','尿液一般性状'],['尿常规','尿沉渣']]},
+ {id:'u24',  n:'24 小时尿',days:90,labs:[['24小时尿','24小时尿液定量']]},
+ {id:'imm',  n:'免疫',days:180,labs:[['免疫','炎症与免疫'],['免疫','肿瘤标志物']]},
+ {id:'coag', n:'凝血',days:180,labs:[['凝血','凝血功能']]},
+ {id:'other',n:'其他已记录指标',days:180,labs:[],other:true},
 ];
 const CHECK_MANUAL=[
- {id:'m_glu',n:'糖代谢（空腹血糖 / 糖化血红蛋白）',days:90},
  {id:'m_thyroid',n:'甲状腺超声（4B 结节）',days:180},
  {id:'m_echo',n:'心脏彩超',days:365},
  {id:'m_kidneyus',n:'肾脏超声',days:365},
 ];
+// 字典不可用或缺项时，内置指标的兜底归属
+const KEY_GROUP={egfr:'renal',crea:'renal',urea:'renal',ua:'renal',cysc:'renal',acr:'renal',malb:'renal',
+ k:'bone',ca:'bone',p:'bone',pth:'bone',hco3:'bone',
+ alb:'liver',hgb:'blood',tc:'lipid',tg:'lipid',ldl:'lipid',upro:'u24'};
 // 组内周期短于整组的指标：单独按自己的周期提醒
-const KEY_DAYS={k:30,ua:60};
+const KEY_DAYS={k:30,ua:60,upro:45,pth:90};
 
 const QUESTIONS=[
  '我的尿蛋白目标是多少？现在2.3g是否需要加强治疗？',
@@ -919,6 +943,13 @@ function renderHome(){
   // 复查提醒
   const v=DB.visits.filter(x=>x.date>=today()).sort((a,b)=>a.date.localeCompare(b.date))[0];
   if(v){ const d=daysBetween(today(),v.date); if(d<=7) rems.push({c:'a',ic:'📅',t:`<b>${d===0?'今天':d+'天后'}</b>有复查安排：${esc(v.dept||'肾内科')}（${v.date}）`}); }
+  // 即使近三次都正常，超出建议周期 3 倍也要提示（大类与单项都算）
+  const plan=reviewPlan();
+  const x3g=plan.filter(x=>x.level==='over3').map(x=>({n:x.n,d:x.daysSince,c:x.cycle}));
+  const x3i=plan.filter(x=>x.level!=='over3')
+    .flatMap(x=>x.keys.filter(it=>it.cycle>0&&it.days>it.cycle*3).map(it=>({n:it.n,d:it.days,c:it.cycle})));
+  const x3=x3g.concat(x3i).sort((a,b)=>b.d-a.d).slice(0,3);
+  if(x3.length) rems.push({c:'r',ic:'🗓',t:`${x3.map(x=>`<b>${x.n}</b> 已 ${x.d} 天未查（建议 ${x.c} 天一次）`).join('；')}，已超建议周期 3 倍，请尽快安排。`});
   // 甲状腺结节
   rems.push({c:'r',ic:'🔴',t:'<b>甲状腺结节 TI-RADS 4B（6.8mm）</b>需 3-6 个月复查超声，如已超过 6 个月请尽快安排。'});
 
@@ -936,18 +967,21 @@ function renderHome(){
   const cnt=Object.keys(taken).filter(x=>taken[x]).length;
   document.getElementById('medProg').textContent=`${cnt}/${MEDS.length} 已服`;
 
-  // 待办：整组逾期优先，其次是组内单项超期（如血钾、尿酸）
+  // 待办：整组逾期/超 3 倍优先，其次是组内单项超期（如血钾、尿酸）
   const todo=[];
-  CHECK_GROUPS.forEach(g=>{
-    const s=groupInfo(g);
-    if(s.st==='over'){ todo.push({n:g.n,d:s.days,last:s.lastDate}); return; }
-    s.items.forEach(it=>{ if(it.stale&&it.days!=null) todo.push({n:it.n,d:it.days,last:it.last}); });
+  plan.forEach(x=>{
+    if(x.level==='over'||x.level==='over3'){ todo.push({n:x.n,d:x.daysSince,last:x.last,lv:x.level==='over3'}); return; }
+    x.keys.forEach(it=>{
+      if(it.days==null||!(it.cycle>0)) return;
+      if(it.days>it.cycle*3||(KEY_DAYS[it.k]&&it.days>it.cycle))
+        todo.push({n:it.n,d:it.days,last:it.last,lv:it.days>it.cycle*3});
+    });
   });
   todo.sort((a,b)=>b.d-a.d);
   const overdue=todo.slice(0,4);
 
   const todoHtml = overdue.length
-    ? overdue.map(o=>`<div class="rem a"><span class="ic">⏰</span><div><b>${o.n}</b> 已 ${o.d} 天未复查（上次 ${o.last}），建议尽快安排</div></div>`).join('')
+    ? overdue.map(o=>`<div class="rem ${o.lv?'r':'a'}"><span class="ic">⏰</span><div><b>${o.n}</b> 已 ${o.d} 天未复查（上次 ${o.last}），${o.lv?'已超建议周期 3 倍，':''}建议尽快安排</div></div>`).join('')
     : '<div class="empty">暂无逾期复查项 ✅</div>';
   document.getElementById('todoHome').innerHTML=todoHtml;
 
@@ -3276,63 +3310,128 @@ function setReview(id,v,def){
   save(); renderVisit(); renderHome();
   toast('复查周期已更新');
 }
-/* 供后续自动化复查提醒使用：当前周期、最近一次记录、是否超期 */
+/* 供后续自动化复查提醒使用：周期、最近一次记录、是否超期/超 3 倍 */
 function reviewPlan(){
+  const c=reviewCtx();
   return CHECK_GROUPS.map(g=>{
-    const s=groupInfo(g);
-    return {id:g.id,n:g.n,days:reviewDays(g.id,g.days),last:s.lastDate,
-      overdue:s.st==='over',keys:g.keys};
+    const s=groupInfo(g,c);
+    return {id:g.id,n:g.n,cycle:s.gdays,last:s.lastDate,daysSince:s.days,level:s.st,
+      abnormal:s.abn.length,urgent:s.urgent,
+      keys:s.items.map(it=>({k:it.k,n:it.n,last:it.last,days:it.days,cycle:it.max,bad:it.bad,stale:it.stale}))};
   });
 }
 
+/* 字典键 → 大类：新导入的指标按 rpt_dict 的化验类型/归类自动归组 */
+function groupKeys(g){
+  if(g.other) return orphanKeys();
+  const ks=new Set();
+  (g.labs||[]).forEach(([lab,cat])=>DICT.forEach(d=>{ if(d.lab===lab&&d.cat===cat) ks.add(d.k); }));
+  Object.keys(META).forEach(k=>{ if(KEY_GROUP[k]===g.id) ks.add(k); });
+  return [...ks];
+}
+/* 有记录、但不属于任何字典大类的指标（个别历史 canon 与字典不一致时兜底） */
+function orphanKeys(){
+  const covered=new Set();
+  CHECK_GROUPS.forEach(g=>{ if(!g.other) groupKeys(g).forEach(k=>covered.add(k)); });
+  const all=new Set();
+  DICT.forEach(d=>all.add(d.k));
+  Object.keys(META).forEach(k=>all.add(k));
+  RPTIDX.forEach((_,k)=>all.add(k));
+  LABIDX.forEach((_,k)=>all.add(k));
+  return [...all].filter(k=>!covered.has(k));
+}
+/* 「近三次有异常」与「超期 3 倍」统一在这里算，整页只算一次 */
+function reviewCtx(){
+  const rec=allRecords();
+  return {bad:recentBadKeys(rec,3)};
+}
 /* 分组的检查状态：整组按最晚一次检查算，组内指标按自己的周期算 */
-function groupInfo(g){
-  let lastDate='', lastK='';
+function groupInfo(g,ctx){
+  const c=ctx||reviewCtx();
   const gd=reviewDays(g.id,g.days);      // 用户在复查页调整后的周期
-  const items=g.keys.map(k=>{
+  const keys=groupKeys(g);
+  let lastDate='';
+  const items=keys.map(k=>{
     const l=last(k);
-    const days=l?daysBetween(l.date,today()):null;
-    if(l&&l.date>lastDate){ lastDate=l.date; lastK=k; }
+    if(!l) return null;
+    if(l.date>lastDate) lastDate=l.date;
+    const days=daysBetween(l.date,today());
     const max=KEY_DAYS[k]||gd;
-    return {k,n:(META[k]&&META[k].n)||k,last:l?l.date:'',days,max,stale:days!=null&&days>max};
-  });
+    return {k,n:metaOf(k).n,last:l.date,days,max,bad:c.bad.has(k),stale:max>0&&days>max};
+  }).filter(Boolean).sort((a,b)=>
+    (b.bad-a.bad)||(b.stale-a.stale)||(b.days-a.days)||a.n.localeCompare(b.n,'zh'));
   const days=lastDate?daysBetween(lastDate,today()):null;
-  const st=days==null?'none':(days>gd?'over':(days>gd*0.75?'near':'ok'));
-  return {g,gdays:gd,items,lastDate,lastK,days,st};
+  // 周期 0 = 按需，不做逾期/超 3 倍判断
+  const st=days==null?'none':(gd<=0?'ok':(days>gd*3?'over3':days>gd?'over':(days>gd*0.75?'near':'ok')));
+  const abn=items.filter(it=>it.bad);
+  return {g,gdays:gd,items,total:keys.length,lastDate,days,st,abn,urgent:abn.length>0||st==='over3'};
 }
 function visitBadge(st,days){
   if(st==='none') return '<span class="badge">待记录</span>';
+  if(st==='over3') return '<span class="badge" style="background:#fdeaea;color:#b32222;font-weight:700">超期 3 倍</span>';
   if(st==='over') return `<span class="badge" style="background:#fdeaea;color:#d93a3a">已逾期 ${days} 天</span>`;
   if(st==='near') return '<span class="badge" style="background:#fdf3e3;color:#e08b0a">临近</span>';
   return '<span class="badge" style="background:#e8f8f0;color:#1a9e63">正常</span>';
 }
-function renderVisit(){
-  document.getElementById('checkGroups').innerHTML=CHECK_GROUPS.map(g=>{
-    const s=groupInfo(g);
-    const chips=s.items.map(it=>{
-      const hot=it.stale&&s.st!=='over';
-      return `<span class="vg-key${hot?' stale':''}"><b>${it.n}</b> ${it.last?dateStr(it.last):'—'}${it.days!=null?' · '+it.days+'天':''}</span>`;
-    }).join('');
-    return `<div class="vg">
-      <div class="vg-hd"><b class="nm">${g.n}</b>${reviewSelect(g.id,g.days)}${visitBadge(s.st,s.days)}</div>
-      <div class="vg-keys">${chips}</div>
-    </div>`;
+let revOtherOpen=false;
+function toggleRevOther(){ revOtherOpen=!revOtherOpen; renderVisit(); }
+function revGroupHtml(s,expanded,issuesOnly){
+  const g=s.g;
+  const abnTag=s.abn.length?`<span class="vg-abn">近三次异常 ${s.abn.length}</span>`:'';
+  // 重点跟踪的大类只展开有问题的单项，正常项收成一行，避免整页变成指标墙
+  let items=s.items, restN=0;
+  if(issuesOnly){
+    items=s.items.filter(it=>it.bad||(it.max>0&&it.days>it.max*3)||(KEY_DAYS[it.k]&&it.stale));
+    restN=s.items.length-items.length;
+  }
+  const chips=items.map(it=>{
+    const cls=it.bad?' bad':(it.max>0&&it.days>it.max*3?' over3':(it.stale?' stale':''));
+    return `<span class="vg-key${cls}"><b>${esc(it.n)}</b> ${dateStr(it.last)} · ${it.days}天</span>`;
   }).join('');
+  return `<div class="vg">
+    <div class="vg-hd"><b class="nm">${esc(g.n)}${abnTag}</b>${reviewSelect(g.id,g.days)}${visitBadge(s.st,s.days)}</div>
+    ${expanded?`<div class="vg-keys">${chips||'<span class="vg-none">尚无可用的检查记录</span>'}</div>
+      <div class="vg-cnt">已记录 ${s.items.length}/${s.total} 项${restN?` · 其余 ${restN} 项在建议周期内`:''}</div>`:''}
+  </div>`;
+}
+function renderVisit(){
+  const ctx=reviewCtx();
+  const all=CHECK_GROUPS.map(g=>groupInfo(g,ctx));
+  const focus=all.filter(s=>s.urgent)
+    .sort((a,b)=>(b.st==='over3')-(a.st==='over3')||b.abn.length-a.abn.length||(b.days||0)-(a.days||0));
+  const rest=all.filter(s=>!s.urgent);
 
-  // 整组还正常、但组内某项已超自己周期（如血钾每月、尿酸每两月）
-  const stale=[];
-  CHECK_GROUPS.forEach(g=>{
-    const s=groupInfo(g);
-    if(s.st==='over') return;              // 整组已逾期，不重复提醒
-    s.items.forEach(it=>{ if(it.stale&&it.days!=null) stale.push(it); });
+  document.getElementById('checkFocus').innerHTML=focus.length
+    ? focus.map(s=>revGroupHtml(s,true,true)).join('')
+    : '<div class="empty">近三次无异常，也没有超期 3 倍的大类 ✅</div>';
+  document.getElementById('checkGroups').innerHTML=rest.length
+    ? rest.map(s=>revGroupHtml(s,revOtherOpen,false)).join('')
+    : '<div class="empty">全部大类都在重点跟踪中</div>';
+  document.getElementById('revOtherBtn').innerHTML=rest.length
+    ? `<button class="mini" onclick="toggleRevOther()">${revOtherOpen?'收起':'展开'} ${rest.length} 类</button>` : '';
+
+  // 单项提醒只保留真正需要行动的：超过建议周期 3 倍，
+  // 或血钾/尿酸这类短周期关键项已超期；按大类合并成一条，避免刷屏
+  const staleG=[];
+  all.forEach(s=>{
+    if(s.st==='over'||s.st==='over3') return;
+    const arr=s.items.filter(it=>(it.max>0&&it.days>it.max*3)||(KEY_DAYS[it.k]&&it.stale));
+    if(arr.length) staleG.push({g:s.g,items:arr});
   });
-  stale.sort((a,b)=>b.days-a.days);
-  document.getElementById('singleStale').innerHTML=stale.length
-    ? stale.map(it=>`<div class="rem a"><span class="ic">⏰</span><div><b>${it.n}</b> 已 ${it.days} 天未查（建议 ${it.max} 天内，上次 ${it.last}）</div></div>`).join('')
+  staleG.sort((a,b)=>b.items.length-a.items.length);
+  document.getElementById('singleStale').innerHTML=staleG.length
+    ? staleG.map(o=>{
+        const x3=o.items.filter(it=>it.max>0&&it.days>it.max*3);
+        const head=x3.length
+          ? `${o.items.length} 项需补查，其中 ${x3.length} 项已超建议周期 3 倍`
+          : `${o.items.length} 项已超自己的建议周期`;
+        const names=o.items.slice(0,8).map(it=>esc(it.n)).join('、')+(o.items.length>8?' 等':'');
+        return `<div class="rem ${x3.length?'r':'a'}"><span class="ic">⏰</span><div><b>${esc(o.g.n)}</b>：${head}<div class="muted" style="margin-top:2px;line-height:1.5">${names}</div></div></div>`;
+      }).join('')
     : '<div class="empty">组内各项均在建议周期内 ✅</div>';
 
   document.getElementById('checkManual').innerHTML=CHECK_MANUAL.map(c=>
-    `<div class="list-item"><div style="flex:1">${c.n}</div>${reviewSelect(c.id,c.days)}</div>`).join('');
+    `<div class="list-item"><div style="flex:1">${esc(c.n)}</div>${reviewSelect(c.id,c.days)}</div>`).join('');
 
   document.getElementById('qList').innerHTML=QUESTIONS.map(q=>`<div class="list-item"><div class="dt">💬</div><div>${q}</div></div>`).join('');
 }
@@ -3452,7 +3551,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.8.6 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.9.0 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
