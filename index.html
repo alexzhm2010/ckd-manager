@@ -241,15 +241,12 @@ padding:1px 3px;color:var(--pri);font-family:inherit;vertical-align:1px;flex:0 0
 .vg-hd .nm{flex:1;min-width:0;font-size:14px}
 .vg-hd .badge{flex:0 0 84px;text-align:center;margin-left:0;font-size:10.5px;white-space:nowrap}
 .vg-keys{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
-.vg-key{font-size:11.5px;background:#f4f7fa;border:1px solid var(--line);border-radius:8px;
-padding:2px 7px;color:#51606f;white-space:nowrap}
-.vg-key b{font-weight:600;color:var(--txt)}
-.vg-key.stale{background:#fdf3e3;border-color:#f4d7a6;color:#a06a12}
-.vg-key.stale b{color:#a06a12}
+/* 指标标签：只有「近三次异常 + 已超建议周期」才标红，其余统一接近白色的灰底 */
+.vg-key{font-size:11.5px;background:#fbfcfd;border:1px solid #eef1f4;border-radius:8px;
+padding:2px 7px;color:#8b97a3;white-space:nowrap}
+.vg-key b{font-weight:600;color:#5b6b7a}
 .vg-key.bad{background:#fdeaea;border-color:#f2c2c2;color:#c23b3b}
 .vg-key.bad b{color:#c23b3b}
-.vg-key.over3{background:#fdeaea;border-color:#e9a3a3;color:#b32222}
-.vg-key.over3 b{color:#b32222}
 .vg-abn{font-size:10.5px;color:#c23b3b;background:#fdeaea;border-radius:7px;padding:1px 6px;
 margin-left:6px;font-weight:600;white-space:nowrap}
 .vg-cnt{font-size:10.5px;color:#a7b2be;margin-top:5px}
@@ -395,7 +392,7 @@ border-radius:50%;animation:spin .85s linear infinite}
 <!-- ============ 复查 ============ -->
 <section class="page" id="p-visit">
   <div class="card">
-    <h2><span class="t"><span class="bar"></span>重点跟踪</span><span class="muted">近三次异常 · 超期 3 倍</span></h2>
+    <h2><span class="t"><span class="bar"></span>重点跟踪</span><span class="muted">近三次异常 · 超期 3 倍 · 异常且超期标红</span></h2>
     <div id="checkFocus"></div>
   </div>
   <div class="card">
@@ -3366,12 +3363,17 @@ function groupInfo(g,ctx){
   const abn=items.filter(it=>it.bad);
   return {g,gdays:gd,items,total:keys.length,lastDate,days,st,abn,urgent:abn.length>0||st==='over3'};
 }
-function visitBadge(st,days){
+function visitBadge(st,days,abn){
   if(st==='none') return '<span class="badge">待记录</span>';
-  if(st==='over3') return '<span class="badge" style="background:#fdeaea;color:#b32222;font-weight:700">超期 3 倍</span>';
-  if(st==='over') return `<span class="badge" style="background:#fdeaea;color:#d93a3a">已逾期 ${days} 天</span>`;
-  if(st==='near') return '<span class="badge" style="background:#fdf3e3;color:#e08b0a">临近</span>';
-  return '<span class="badge" style="background:#e8f8f0;color:#1a9e63">正常</span>';
+  if(st==='over3'){
+    // 只有「这一大类里近三次有异常」才用红色，单纯超期用琥珀色
+    return abn
+      ? '<span class="badge" style="background:#fdeaea;color:#b32222;font-weight:700">超期 3 倍</span>'
+      : '<span class="badge" style="background:#fdf3e3;color:#a06a12;font-weight:700">超期 3 倍</span>';
+  }
+  if(st==='over') return `<span class="badge" style="background:#fdf3e3;color:#a06a12">已逾期 ${days} 天</span>`;
+  if(st==='near') return '<span class="badge" style="background:#fdf8ee;color:#c8933f">临近</span>';
+  return '<span class="badge" style="background:#eff7f2;color:#1a9e63">正常</span>';
 }
 let revOtherOpen=false;
 function toggleRevOther(){ revOtherOpen=!revOtherOpen; renderVisit(); }
@@ -3385,11 +3387,11 @@ function revGroupHtml(s,expanded,issuesOnly){
     restN=s.items.length-items.length;
   }
   const chips=items.map(it=>{
-    const cls=it.bad?' bad':(it.max>0&&it.days>it.max*3?' over3':(it.stale?' stale':''));
-    return `<span class="vg-key${cls}"><b>${esc(it.n)}</b> ${dateStr(it.last)} · ${it.days}天</span>`;
+    const red=it.bad&&it.stale;
+    return `<span class="vg-key${red?' bad':''}"><b>${esc(it.n)}</b> ${dateStr(it.last)} · ${it.days}天${red?' · 异常':''}</span>`;
   }).join('');
   return `<div class="vg">
-    <div class="vg-hd"><b class="nm">${esc(g.n)}${abnTag}</b>${reviewSelect(g.id,g.days)}${visitBadge(s.st,s.days)}</div>
+    <div class="vg-hd"><b class="nm">${esc(g.n)}${abnTag}</b>${reviewSelect(g.id,g.days)}${visitBadge(s.st,s.days,s.abn.length)}</div>
     ${expanded?`<div class="vg-keys">${chips||'<span class="vg-none">尚无可用的检查记录</span>'}</div>
       <div class="vg-cnt">已记录 ${s.items.length}/${s.total} 项${restN?` · 其余 ${restN} 项在建议周期内`:''}</div>`:''}
   </div>`;
@@ -3551,7 +3553,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.9.0 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.9.1 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
