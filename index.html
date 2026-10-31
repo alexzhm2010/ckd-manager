@@ -480,22 +480,22 @@ const daysBetween=(a,b)=>Math.round((new Date(b)-new Date(a))/86400000);
 const META={
   egfr:{n:'eGFR 肾功能',u:'ml/min',ref:[80,120],goal:'力争稳住 24 以上，避免跌破 15',dir:'high'},
   crea:{n:'血肌酐 Crea',u:'μmol/L',ref:[57,97],goal:'尽量维持在 250 以下',dir:'low'},
-  upro:{n:'24h尿蛋白',u:'g/24h',ref:[0,0.15],goal:'目标 &lt;1.0g，先争取稳定下降',dir:'low'},
-  acr:{n:'尿ACR',u:'mg/g',ref:[0,30],goal:'目标 &lt;300',dir:'low'},
+  upro:{n:'24h尿蛋白',u:'g/24h',ref:[0,0.15],goal:'目标 <1.0g，先争取稳定下降',dir:'low'},
+  acr:{n:'尿ACR',u:'mg/g',ref:[0,30],goal:'目标 <300',dir:'low'},
   malb:{n:'尿微量白蛋白',u:'mg/L',ref:[0,30],goal:'持续下降',dir:'low'},
-  k:{n:'血钾 K',u:'mmol/L',ref:[3.5,5.3],goal:'&lt;5.0，超过 5.5 需紧急处理',dir:'low'},
-  ua:{n:'尿酸 UA',u:'μmol/L',ref:[214,488],goal:'&lt;360（有痛风史）',dir:'low'},
+  k:{n:'血钾 K',u:'mmol/L',ref:[3.5,5.3],goal:'<5.0，超过 5.5 需紧急处理',dir:'low'},
+  ua:{n:'尿酸 UA',u:'μmol/L',ref:[214,488],goal:'<360（有痛风史）',dir:'low'},
   hco3:{n:'碳酸氢盐',u:'mmol/L',ref:[22,29],goal:'≥22，低于则提示酸中毒',dir:'high'},
   ca:{n:'血钙 Ca',u:'mmol/L',ref:[2.11,2.52],goal:'保持正常',dir:'range'},
-  p:{n:'血磷 P',u:'mmol/L',ref:[0.85,1.51],goal:'&lt;1.45',dir:'low'},
-  pth:{n:'甲状旁腺素 PTH',u:'pg/mL',ref:[18.4,80.1],goal:'&lt;80，偏高提示骨代谢紊乱',dir:'low'},
+  p:{n:'血磷 P',u:'mmol/L',ref:[0.85,1.51],goal:'<1.45',dir:'low'},
+  pth:{n:'甲状旁腺素 PTH',u:'pg/mL',ref:[18.4,80.1],goal:'<80，偏高提示骨代谢紊乱',dir:'low'},
   hgb:{n:'血红蛋白',u:'g/L',ref:[130,175],goal:'≥110，低于提示肾性贫血',dir:'high'},
   alb:{n:'白蛋白',u:'g/L',ref:[40,55],goal:'≥40，保证营养',dir:'high'},
   urea:{n:'血尿素',u:'mmol/L',ref:[3.1,8.0],goal:'尽量下降',dir:'low'},
   cysc:{n:'胱抑素C',u:'mg/L',ref:[0.59,1.16],goal:'持续监测',dir:'low'},
-  tc:{n:'总胆固醇',u:'mmol/L',ref:[3.12,6.24],goal:'&lt;5.2',dir:'low'},
-  tg:{n:'甘油三酯',u:'mmol/L',ref:[0.4,1.8],goal:'&lt;1.7',dir:'low'},
-  ldl:{n:'低密度脂蛋白LDL',u:'mmol/L',ref:[0,3.12],goal:'&lt;2.6（心血管高危）',dir:'low'},
+  tc:{n:'总胆固醇',u:'mmol/L',ref:[3.12,6.24],goal:'<5.2',dir:'low'},
+  tg:{n:'甘油三酯',u:'mmol/L',ref:[0.4,1.8],goal:'<1.7',dir:'low'},
+  ldl:{n:'低密度脂蛋白LDL',u:'mmol/L',ref:[0,3.12],goal:'<2.6（心血管高危）',dir:'low'},
 };
 const ORDER=['egfr','crea','upro','acr','k','ua','hgb','hco3','p','pth','tg','ldl','ca','alb','cysc','urea','malb','tc'];
 FACTS_READY=true;          // META / ORDER 已就绪，之后 save 可以安全地写 facts
@@ -3446,7 +3446,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.8.1 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.8.2 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
