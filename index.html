@@ -283,7 +283,9 @@ border-radius:50%;animation:spin .85s linear infinite}
     <div id="cloudLogin">
       <div class="hint">数据只存在云端，本机不保存。邮箱会记住，每次使用都需要输入密码</div>
       <input type="email" id="cloudEmail" placeholder="邮箱（会记住）" autocomplete="off" inputmode="email" style="letter-spacing:0;font-size:15px">
-      <input type="password" id="cloudPwd" placeholder="密码" autocomplete="off">
+      <!-- 密码不做任何自动填充：new-password + 初始 readonly，聚焦后才可输入，避免浏览器/密码管理器回填 -->
+      <input type="password" id="cloudPwd" placeholder="密码" autocomplete="new-password" name="ckd-new-password" readonly
+        onfocus="this.removeAttribute('readonly')" data-lpignore="true" data-1p-ignore="true">
       <button class="btn" onclick="doCloudLogin()">登录</button>
       <div class="login-err" id="cloudErr"></div>
       <div class="login-secure">还没有账号？<a href="#" onclick="doCloudSignUp();return false">用此邮箱注册</a></div>
@@ -3482,6 +3484,9 @@ function showBoot(msg){
 function showLogin(){
   const b=document.getElementById('bootBox'); if(b) b.style.display='none';
   const card=document.getElementById('loginCard'); if(card) card.style.display='block';
+  // 每次回到登录界面都清空密码，且恢复 readonly，防止浏览器回填
+  const p=document.getElementById('cloudPwd');
+  if(p){ p.value=''; p.setAttribute('readonly',''); }
 }
 
 async function doCloudLogin(){
@@ -3553,7 +3558,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.9.3 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.9.4 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
