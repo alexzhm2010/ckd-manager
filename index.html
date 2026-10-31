@@ -387,15 +387,6 @@ border-radius:50%;animation:spin .85s linear infinite}
 <!-- ============ 复查 ============ -->
 <section class="page" id="p-visit">
   <div class="card">
-    <h2><span class="t"><span class="bar"></span>下次复查倒计时</span></h2>
-    <div id="nextVisit" style="text-align:center;padding:10px 0"></div>
-    <div class="row" style="margin-top:6px">
-      <div class="field"><label>复查日期</label><input type="date" id="visitDate"></div>
-      <div class="field"><label>科室/项目</label><input id="visitDept" placeholder="如 肾内科 血钾+肌酐"></div>
-    </div>
-    <button class="btn" onclick="addVisit()">保存复查安排</button>
-  </div>
-  <div class="card">
     <h2><span class="t"><span class="bar"></span>按大类复查状态</span><span class="muted">周期可调，按上次检查日期估算</span></h2>
     <div id="checkGroups"></div>
   </div>
@@ -3316,16 +3307,6 @@ function visitBadge(st,days){
   return '<span class="badge" style="background:#e8f8f0;color:#1a9e63">正常</span>';
 }
 function renderVisit(){
-  const list=DB.visits.filter(v=>v.date>=today()).sort((a,b)=>a.date.localeCompare(b.date));
-  const el=document.getElementById('nextVisit');
-  if(list.length){
-    const v=list[0]; const d=daysBetween(today(),v.date);
-    el.innerHTML=`<div style="font-size:44px;font-weight:700;color:${d<=7?'#d93a3a':'#1287b8'};line-height:1.1">${d}</div>
-      <div class="muted">天后 · ${v.date} ${esc(v.dept||'')}</div>`;
-  } else {
-    el.innerHTML=`<div style="font-size:16px;color:#7b8794;padding:8px 0">尚未安排复查</div>`;
-  }
-
   document.getElementById('checkGroups').innerHTML=CHECK_GROUPS.map(g=>{
     const s=groupInfo(g);
     const chips=s.items.map(it=>{
@@ -3355,16 +3336,6 @@ function renderVisit(){
 
   document.getElementById('qList').innerHTML=QUESTIONS.map(q=>`<div class="list-item"><div class="dt">💬</div><div>${q}</div></div>`).join('');
 }
-function addVisit(){
-  const d=document.getElementById('visitDate').value;
-  if(!d) return toast('请选择日期');
-  // 过去日期存进去后会被「下次复查」过滤掉，用户以为保存成功其实看不到
-  if(d<today()) return toast('复查日期不能早于今天');
-  DB.visits.push({date:d,dept:document.getElementById('visitDept').value});
-  save(); renderVisit(); renderHome(); toast('已保存');
-  document.getElementById('visitDate').value='';document.getElementById('visitDept').value='';
-}
-
 /* ==================== 知识页 ==================== */
 function renderKnow(){
   document.getElementById('knowList').innerHTML=KNOW.map(k=>
@@ -3481,7 +3452,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.8.5 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.8.6 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
