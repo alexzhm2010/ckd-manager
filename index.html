@@ -343,7 +343,7 @@ border-radius:50%;animation:spin .85s linear infinite}
     <div class="muted" id="chartTip" style="font-size:12px;margin-top:4px"></div>
   </div>
   <div class="card">
-    <h2><span class="t"><span class="bar"></span>我的目标值</span></h2>
+    <h2><span class="t"><span class="bar"></span>我的目标值</span><span class="muted" id="goalCount"></span></h2>
     <table class="tb">
       <thead><tr><th>指标</th><th>目标</th><th style="text-align:right">最新</th></tr></thead>
       <tbody id="goalTb"></tbody>
@@ -1067,20 +1067,31 @@ function seriesOf(k){
   return [...m.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([date,v])=>({date,v}));
 }
 
-/* 我的目标值：全部标准指标按「化验类型 → 归类」分组展示，没有目标的标“未设目标” */
+/* 我的目标值：只列「近 3 次记录中有不达标」的指标，仍按化验类型/归类分组 */
 function renderGoals(){
   const el=document.getElementById('goalTb'); if(!el) return;
-  el.innerHTML=canonGroups().map(g=>{
+  const cnt=document.getElementById('goalCount');
+  let shown=0;
+  const html=canonGroups().map(g=>{
+    const items=g.items.filter(o=>{
+      const m=META[o.k];
+      if(!m||!m.ref||m.ref.length<2) return false;
+      return seriesOf(o.k).slice(-3).some(x=>flagOf(x.v,m));
+    });
+    if(!items.length) return '';
+    shown+=items.length;
     const head=`<tr><td colspan="3" style="background:#f2f6f9;color:#2f6fb5;font-size:12px;font-weight:600;padding:7px 9px">${esc(g.lab+' · '+g.cat)}</td></tr>`;
-    const rows=g.items.map(o=>{
-      const m=META[o.k], l=last(o.k);
+    const rows=items.map(o=>{
+      const m=META[o.k], l=last(o.k), bad=l&&flagOf(l.v,m);
       const v=l?(typeof l.v==='number'?fmt(l.v):String(l.v)):'—';
       return `<tr><td><b>${esc(o.n)}</b></td>
-        <td style="color:#7b8794;font-size:12px">${m&&m.goal?esc(m.goal):'<span class="muted">未设目标</span>'}</td>
-        <td style="text-align:right;font-weight:600">${esc(v)}</td></tr>`;
+        <td style="color:#7b8794;font-size:12px">${m.goal?esc(m.goal):'<span class="muted">未设目标</span>'}</td>
+        <td style="text-align:right;font-weight:600${bad?';color:#d93a3a':''}">${esc(v)}</td></tr>`;
     }).join('');
     return head+rows;
   }).join('');
+  if(cnt) cnt.textContent=shown?`近 3 次有异常 ${shown} 项`:'';
+  el.innerHTML=html||'<tr><td colspan="3" class="empty" style="padding:14px 8px;text-align:center">最近 3 次记录中没有不达标指标 ✅</td></tr>';
 }
 
 function drawChart(){
@@ -3527,7 +3538,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.7.1 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.7.2 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
