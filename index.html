@@ -815,6 +815,21 @@ async function cloudPullAll(){
   }
   return all;
 }
+/* 指标字典：归类下拉的分组依据（化验类型 → 归类 → 标准指标名） */
+async function cloudPullDict(){
+  const sb=await getSupabase();
+  const size=500; let from=0, all=[];
+  while(true){
+    const {data,error}=await sb.from('rpt_dict')
+      .select('lab_type,category,std_name,canon,unit').range(from,from+size-1);
+    if(error) throw error;
+    if(!data||!data.length) break;
+    all=all.concat(data);
+    if(data.length<size) break;
+    from+=size;
+  }
+  return all;
+}
 
 function queueCloudSync(ups,del){
   if(!cloudUser||!CLOUD_ON) return;
@@ -2293,7 +2308,7 @@ let rptShow={};        // 往期报告是否展开（默认折叠，只露标题
 let rptAll=false;      // 是否列出全部日期
 let rptQ='';           // 按原始指标名称筛选
 const RECENT_RPT=3;    // 默认只展示最近 3 份，往期折叠
-const mtLabel=k=>SHORT[k]||(META[k]?META[k].n:k);
+
 
 function toggleRpt(d){ rptOpen[d]=!rptOpen[d]; if(rptOpen[d]) rptShow[d]=true; renderRpt(); }
 function toggleRptAll(){ rptAll=!rptAll; renderRpt(); }
@@ -2313,7 +2328,7 @@ const isAbn=it=>it&&(it.st==='high'||it.st==='low');
 /* 单行可编辑：名称、数值、单位（只读）、归类；异常项保留红字/箭头/参考区间 */
 function rptEdRow(d,i,it){
   const abn=isAbn(it);
-  const ck=META[canonOf(it)]?canonOf(it):'';
+  const ck=isCanonKey(canonOf(it))?canonOf(it):'';
   const mark=abn&&typeof it.v==='number'?(it.st==='high'?'↑':'↓'):'';   // 2+ / 阴性 不用再加箭头
   const fx=it.raw?`<span class="re-approx" title="原件读数 ${esc(it.raw)}，按参考区间修正">≈</span>`:'';
   const tag=abn?`<span class="mt-tag">${it.st==='high'?'偏高':'偏低'}</span>`:'';
@@ -2330,9 +2345,7 @@ function rptEdRow(d,i,it){
     </div>
     <div class="l2">
       <select class="mt-sel${ck?' set':''}" onchange="mtAssign(${i},this.value,'${d}')" title="这项算档案里的哪个指标">
-        <option value=""${ck?'':' selected'}>未归类</option>
-        ${ORDER.map(o=>`<option value="${o}"${ck===o?' selected':''}>${esc(mtLabel(o))}</option>`).join('')}
-        <option value="__custom">＋自定义…</option>
+        ${assignOptions(ck)}
       </select>
       ${abn&&refTxt(it)?`<span class="re-ref">参考 ${esc(refTxt(it))}</span>`:''}
     </div>
@@ -2495,6 +2508,66 @@ const normUnit=u=>String(u||'').replace(/[\s×*^·]/g,'')
   .replace(/[μµ]/g,'u').toUpperCase();
 const valKind=v=>typeof v==='number'?'n':'s';
 
+/* ==================== 指标字典（rpt_dict） ==================== */
+/* 归类下拉按「化验类型 → 临床归类 → 标准指标名」分组，记录页与导入核对共用 */
+let DICT=[];
+const DICTBYKEY=new Map();
+let ASSIGN_BASE='';
+const LAB_ORDER=['生化','血常规','尿常规','24小时尿','免疫','凝血'];
+const labRank=l=>{ const i=LAB_ORDER.indexOf(l); return i<0?99:i; };
+/* 有效规范键：内置/自定义指标，或字典里已标准化的指标（不一定要进趋势图） */
+const isCanonKey=k=>!!k&&(!!META[k]||DICTBYKEY.has(k));
+const canonLabel=k=>{ const d=DICTBYKEY.get(k); return d?d.n:((META[k]&&META[k].n)||k); };
+function setDict(rows){
+  DICT=[]; DICTBYKEY.clear(); ASSIGN_BASE='';
+  const seen=new Set();
+  (rows||[]).forEach(r=>{
+    const k=String(r.canon||'').trim();
+    if(!k||seen.has(k)) return;
+    seen.add(k);
+    const d={k,n:String(r.std_name||k),u:r.unit||'',lab:r.lab_type||'其他',cat:r.category||'其他'};
+    DICT.push(d); DICTBYKEY.set(k,d);
+  });
+  DICT.sort((a,b)=>labRank(a.lab)-labRank(b.lab)||a.lab.localeCompare(b.lab,'zh')||
+    String(a.cat).localeCompare(String(b.cat),'zh')||String(a.n).localeCompare(String(b.n),'zh'));
+}
+/* 字典没取到（离线或接口异常）时，用报告项自带的归类信息兜底 */
+function dictFallback(){
+  const rows=[], seen=new Set();
+  Object.keys(DB.rpt||{}).forEach(d=>rptItems(d).forEach(it=>{
+    const k=canonOf(it); if(!k||seen.has(k)) return; seen.add(k);
+    rows.push({canon:k,std_name:it.n,unit:it.u,lab_type:it.lab||'其他',category:it.cat||'其他'});
+  }));
+  setDict(rows);
+}
+/* 下拉内容只拼一次，之后按当前归属补 selected，避免每行重复生成上百个选项 */
+function buildAssignBase(){
+  const groups=new Map();
+  const add=(lab,cat,k,n)=>{
+    if(!k) return;
+    const g=lab+'|'+cat;
+    if(!groups.has(g)) groups.set(g,{lab,cat,items:[]});
+    groups.get(g).items.push({k,n:String(n||k)});
+  };
+  DICT.forEach(d=>add(d.lab,d.cat,d.k,d.n));
+  Object.keys(META).forEach(k=>{ if(!DICTBYKEY.has(k)) add('其他','其他已登记指标',k,(META[k]&&META[k].n)||k); });
+  const gs=[...groups.values()].sort((a,b)=>labRank(a.lab)-labRank(b.lab)||a.lab.localeCompare(b.lab,'zh')||
+    String(a.cat).localeCompare(String(b.cat),'zh'));
+  return '<option value="">未归类</option>' + gs.map(g=>{
+    const items=g.items.slice().sort((a,b)=>a.n.localeCompare(b.n,'zh'));
+    return `<optgroup label="${esc(g.lab+' · '+g.cat)}">`+
+      items.map(o=>`<option value="${esc(o.k)}">${esc(o.n)}</option>`).join('')+'</optgroup>';
+  }).join('') + '<option value="__custom">＋自定义…</option>';
+}
+function assignOptions(cur){
+  if(!ASSIGN_BASE) ASSIGN_BASE=buildAssignBase();
+  if(!cur) return ASSIGN_BASE;
+  const tag='value="'+esc(cur)+'"';
+  const i=ASSIGN_BASE.indexOf(tag);
+  if(i<0) return ASSIGN_BASE;
+  return ASSIGN_BASE.slice(0,i)+tag+' selected'+ASSIGN_BASE.slice(i+tag.length);
+}
+
 /* 学到的别名（不同医院的写法）：归一化写法 → 规范指标 key。
    存在 facts 表里（kind='alias'），跟账号走；换设备、换浏览器都还在 */
 let CANONMAP=new Map();
@@ -2505,7 +2578,7 @@ function buildCanonMap(rows){
     if(!r||r.kind!=='alias'||!r.name) return;
     const a=aliasKey(r.name||'');
     if(!a) return;
-    if(r.key&&META[r.key]) CANONMAP.set(a,r.key);
+    if(r.key&&isCanonKey(r.key)) CANONMAP.set(a,r.key);
     // 负别名（key 为空 + meta.neg）：这个名字明确「未归类」，不再按静态别名表自动归类
     else if(r.meta&&r.meta.neg) CANONMAP.set(a,'');
   });
@@ -2520,6 +2593,7 @@ function registerMetrics(obj){
     META[k]={n:m.n||k,u:m.u||'',ref:Array.isArray(m.ref)&&m.ref.length===2?m.ref:null,
       goal:m.goal||'',dir:m.dir||'range',custom:true};
     if(ORDER.indexOf(k)<0) ORDER.push(k);
+    ASSIGN_BASE='';                 // 指标集合变了，下拉分组下次重新拼
   });
 }
 function registerMetric(k,m){ const o={}; o[k]=m; registerMetrics(o); }
@@ -2546,7 +2620,7 @@ function learnAlias(name,key){
   if(!a) return;
   const uid='alias|'+a;
   const prev=FACTMAP.get(uid)||null;
-  const want=key&&META[key]?key:null;
+  const want=key&&isCanonKey(key)?key:null;
   const neg=key===null;
   let touched=0, changed=false;
 
@@ -2701,7 +2775,7 @@ function impRow(di,ii,it){
   const rt=refTxt(it);
   const ref=rt?`<i>${rt}</i>`:'';
   const k=canonOf(it);
-  const ck=META[k]?k:'';
+  const ck=isCanonKey(k)?k:'';
   return `<div class="ci-row${cls}${it._warn?' warn':''}" data-row="${di}_${ii}">
     <span class="ci-n" title="${esc(it.n)} ${rt}">
       <input class="ci-name" data-n="${di}_${ii}" value="${esc(it.n)}"
@@ -2714,9 +2788,7 @@ function impRow(di,ii,it){
     <span class="ci-u">${esc(it.u||'')}</span>
     <select class="ci-c${ck?' set':''}" onchange="impAssign(${di},${ii},this.value)"
       title="这项算档案里的哪个指标（写法不同也能归到一起）">
-      <option value="">未归类</option>
-      ${ORDER.map(o=>`<option value="${o}"${ck===o?' selected':''}>${SHORT[o]||META[o].n}</option>`).join('')}
-      <option value="__custom">＋自定义…</option>
+      ${assignOptions(ck)}
     </select>
     <button class="ci-ok${it._ok?' on':''}" data-ok="${di}_${ii}" onclick="impMark(${di},${ii})"
       title="${it._ok?'已勾选，点击取消':'勾选后才导入这一行'}">${it._ok?'✓':'○'}</button>
@@ -2797,7 +2869,7 @@ function ensureAbnormalTracked(){
   const visit=it=>{
     if(!isAbn(it)) return;
     const k=canonOf(it);
-    if(k&&META[k]) return;          // 已有归属指标
+    if(k&&isCanonKey(k)) return;    // 已有归属指标（含字典里的标准指标）
     if(isNegAlias(it.n)) return;    // 明确未归类
     const ck=customKey(it.n);
     if(!META[ck]){
@@ -2833,16 +2905,16 @@ function impAssign(di,ii,key){
     DB.metrics=DB.metrics||{};
     DB.metrics[k]=m;
   }
-  const want=k&&META[k]?k:null;
+  const want=k&&isCanonKey(k)?k:null;
   const y=window.scrollY;
   if(want){ it.cn=want; delete it._nc; } else { delete it.cn; it._nc=true; }
-  it._custom=!!(want&&META[want].custom);
+  it._custom=!!(want&&META[want]&&META[want].custom);
   delete it._auto;               // 人工指定后不再算「自动纳入」
   learnAlias(it.n,want);
-  if(want&&META[want].custom) save();
+  if(want&&META[want]&&META[want].custom) save();
   renderImpResult();
   window.scrollTo(0,y);
-  toast(want?`「${it.n}」已归到 ${META[want].n}，以后自动记住`:`「${it.n}」已设为未归类，以后也保持未归类`);
+  toast(want?`「${it.n}」已归到 ${canonLabel(want)}，以后自动记住`:`「${it.n}」已设为未归类，以后也保持未归类`);
 }
 
 function impMark(di,ii){
@@ -3278,7 +3350,7 @@ function mtAssign(i,key,d){
     DB.metrics=DB.metrics||{};
     DB.metrics[k]=m;
   }
-  const want=k&&META[k]?k:null;
+  const want=k&&isCanonKey(k)?k:null;
   // 同名写法在所有日期上的旧归属先记下来，改完统一把趋势同步过去
   const a=aliasKey(it.n), hits=[];
   Object.keys(DB.rpt||{}).forEach(dd=>rptItems(dd).forEach((x,j)=>{
@@ -3287,7 +3359,7 @@ function mtAssign(i,key,d){
   learnAlias(it.n,want);          // 记住别名，并把所有同名项改到新归属
   hits.forEach(h=>{ const x=rptItems(h.d)[h.j]; if(x) mtSync(h.d,x,h.c,h.v); });
   save(); rptPaint(); renderHome();
-  toast(want?'「'+it.n+'」已归到 '+META[want].n+'，以后自动记住':'「'+it.n+'」已设为未归类，以后也保持未归类');
+  toast(want?'「'+it.n+'」已归到 '+canonLabel(want)+'，以后自动记住':'「'+it.n+'」已设为未归类，以后也保持未归类');
 }
 
 /* 报告项改动后同步趋势：旧归属下与旧值一致的那条移除；新归属可跟踪时写入。
@@ -3397,8 +3469,13 @@ document.getElementById('cloudPwd').addEventListener('keydown',e=>{ if(e.key==='
 async function bootstrapData(){
   if(!CLOUD_ON||!cloudUser){ applyFacts([]); return; }
   try{
+    // 先取字典再重建数据：别名要能指到字典里的标准指标（不只是趋势指标）
+    const dictP=withTimeout(cloudPullDict(),10000).catch(()=>[]);
     const rows=await withTimeout(cloudPullAll(),15000);
+    const dictRows=await dictP;
+    setDict(dictRows);
     applyFacts(rows);
+    if(!dictRows.length){ dictFallback(); buildCanonMap(FACTS); }
     ensureAbnormalTracked();         // 历史上有过异常的项，补进日常跟踪
     cloudErrMsg='';
   }catch(e){
@@ -3416,7 +3493,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.6.7 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.7.0 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
