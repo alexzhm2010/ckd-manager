@@ -90,6 +90,11 @@ background:var(--pri2);color:#fff;cursor:pointer;width:100%;transition:.15s}
 .tb th{background:#f2f6f9;color:#51606f;font-weight:600;padding:8px 9px;text-align:left;font-size:12px}
 .tb td{padding:8px 9px;border-bottom:1px solid var(--line);vertical-align:top}
 .tb tr:last-child td{border-bottom:none}
+/* 我的目标值：最后一列并排展示该指标最近三次记录（左→右由远及近） */
+.tb td.goal-v{padding-left:3px;padding-right:3px;text-align:right;white-space:nowrap;vertical-align:middle}
+.goal-v .v{display:block;font-weight:600;line-height:1.35}
+.goal-v .d{display:block;font-size:10px;color:#a7b2be;font-weight:400;line-height:1.3}
+.goal-v.bad .v{color:var(--red)}
 .bp{font-weight:600}
 .bp.hi{color:var(--red)}
 /* ==== 图表 ==== */
@@ -331,7 +336,7 @@ border-radius:50%;animation:spin .85s linear infinite}
     <div class="seg" id="segBox"></div>
     <div class="seg-more" id="segMore"></div>
     <div class="seg-ops">
-      <span class="muted" style="font-size:11.5px">默认只显示持续异常（≥3 次不合格）的指标</span>
+      <span class="muted" style="font-size:11.5px">默认显示最近 3 次记录中有不达标的指标</span>
       <button class="mini" onclick="clearSel()">清空</button>
     </div>
     <div class="axis-note" id="axisNote"></div>
@@ -341,7 +346,7 @@ border-radius:50%;animation:spin .85s linear infinite}
   <div class="card">
     <h2><span class="t"><span class="bar"></span>我的目标值</span><span class="muted" id="goalCount"></span></h2>
     <table class="tb">
-      <thead><tr><th>指标</th><th>目标</th><th style="text-align:right">最新</th></tr></thead>
+      <thead><tr><th>指标</th><th>目标</th><th colspan="3" style="text-align:right">最近三次（由远及近）</th></tr></thead>
       <tbody id="goalTb"></tbody>
     </table>
   </div>
@@ -977,35 +982,38 @@ let selInited=false;            // 首次进入指标页时按异常情况给默
 const COLORS=['#1287b8','#e08b0a','#1a9e63','#a855c7','#d93a3a','#0f9ba8'];
 const colorOf=k=>COLORS[selKeys.indexOf(k)%COLORS.length];
 
-/* 每个指标出现过异常（不合格）的日期集合：
-   报告项按归属指标算，补录/趋势值按参考区间算；同一天多次只算一次 */
-function abnStats(){
-  const m=new Map();
-  const add=(k,d)=>{ if(!k) return; if(!m.has(k)) m.set(k,new Set()); m.get(k).add(d); };
-  Object.keys(DB.rpt||{}).forEach(d=>{
-    (rptItems(d)||[]).forEach(it=>{ if(isAbn(it)) add(canonOf(it),d); });
-  });
+/* 每个指标的全部记录（报告项 + 补录/趋势），按日期去重。
+   值优先用趋势值；异常判断优先用报告项自带的高低标记（定性项也能识别） */
+function allRecords(){
+  const m=new Map();                       // key -> Map(date -> {v,bad})
+  const put=(k,d,v,bad,overwrite)=>{
+    if(!k) return;
+    let r=m.get(k); if(!r){ r=new Map(); m.set(k,r); }
+    const cur=r.get(d);
+    if(cur){ if(overwrite) cur.v=v; if(bad!=null) cur.bad=bad; }
+    else r.set(d,{v,bad:!!bad});
+  };
   Object.keys(DB.labs||{}).forEach(d=>{
-    const rec=DB.labs[d]||{};
-    Object.keys(rec).forEach(k=>{
-      const mm=META[k]; if(!mm||!mm.ref||mm.ref.length<2) return;
-      const v=Number(rec[k]);
-      if(isFinite(v)&&flagOf(v,mm)) add(k,d);
-    });
+    Object.keys(DB.labs[d]||{}).forEach(k=>put(k,d,DB.labs[d][k],!!flagOf(DB.labs[d][k],META[k]),true));
+  });
+  Object.keys(DB.rpt||{}).forEach(d=>{
+    rptItems(d).forEach(it=>{ const k=canonOf(it); put(k,d,it.v,isAbn(it),false); });
   });
   return m;
 }
-const abnCountOf=(m,k)=>(m.get(k)||new Set()).size;
-
-/* 默认展示：不合格日期 ≥3 次的指标，按次数从多到少，最多 3 项。
-   只有 1~2 次不合格或全部合格的指标不默认展示，收在「＋ 更多指标」里 */
-const ABN_DEFAULT_MIN=3;
-function trendDefaultKeys(stats){
-  const st=stats||abnStats();
-  return ORDER.filter(k=>META[k]&&seriesOf(k).length)
-    .filter(k=>abnCountOf(st,k)>=ABN_DEFAULT_MIN)
-    .sort((a,b)=>abnCountOf(st,b)-abnCountOf(st,a)||ORDER.indexOf(a)-ORDER.indexOf(b))
-    .slice(0,3);
+/* 展示规则（趋势与目标值共用）：某个指标最后 n 次记录中有一次不达标就纳入 */
+function recentBadKeys(m,n){
+  const rec=m||allRecords(), out=new Set();
+  rec.forEach((r,k)=>{
+    const ds=[...r.keys()].sort().slice(-(n||3));
+    if(ds.some(d=>r.get(d).bad)) out.add(k);
+  });
+  return out;
+}
+/* 默认展示：最近 3 次记录中有不达标的标准指标 */
+function trendDefaultKeys(){
+  const bad=recentBadKeys();
+  return ORDER.filter(k=>META[k]&&seriesOf(k).length&&bad.has(k));
 }
 function initTrendSel(){
   if(selInited) return;
@@ -1013,33 +1021,32 @@ function initTrendSel(){
   selKeys=trendDefaultKeys();
 }
 
-function segChip(k,stats){
+function segChip(k,bad){
   const on=selKeys.includes(k);
   const c=on?colorOf(k):'#cfd8e0';
-  const n=stats?abnCountOf(stats,k):0;
-  const badge=n?`<span class="seg-badge${n<ABN_DEFAULT_MIN?' mild':''}">${n}次</span>`:'';
+  const hit=bad&&bad.has(k);
+  const badge=hit?'<span class="seg-badge">异常</span>':'';
   return `<button class="${on?'on':''}" onclick="toggleKey('${k}')"
-    title="${esc(META[k].n)}${n?' · 不合格 '+n+' 次':''}">
+    title="${esc(META[k].n)}${hit?' · 最近 3 次记录中有不达标':''}">
     <span class="sw" style="background:${c}"></span>${esc(META[k].n.replace(/[（(].*?[)）]/,''))}${badge}</button>`;
 }
 function renderSeg(){
-  const stats=abnStats();
+  const bad=recentBadKeys();
   const box=document.getElementById('segBox');
   if(!box) return;
   // 顶部只放已选指标，默认可视化压力小；其余指标收进「＋」
-  const picked=selKeys.filter(k=>META[k]).map(k=>segChip(k,stats)).join('');
+  const picked=selKeys.filter(k=>META[k]).map(k=>segChip(k,bad)).join('');
   box.innerHTML=picked+
     `<button class="seg-add" onclick="toggleSegMore()" title="${segMoreOpen?'收起指标':'更多指标'}">${segMoreOpen?'×':'＋'}</button>`;
   const more=document.getElementById('segMore');
   if(more){
     const has=k=>META[k]&&seriesOf(k).length;
-    const bad=ORDER.filter(k=>has(k)&&abnCountOf(stats,k)>0)
-      .sort((a,b)=>abnCountOf(stats,b)-abnCountOf(stats,a)||ORDER.indexOf(a)-ORDER.indexOf(b));
-    const good=ORDER.filter(k=>has(k)&&abnCountOf(stats,k)===0);
+    const b=ORDER.filter(k=>has(k)&&bad.has(k));
+    const g=ORDER.filter(k=>has(k)&&!bad.has(k));
     const grp=(lb,ks)=>`<div class="grp"><span class="lb">${lb}</span>${
-      ks.map(k=>segChip(k,stats)).join('')||'<span class="lb">无</span>'}</div>`;
-    more.innerHTML=grp(`有不合格记录 <b>${bad.length}</b> 项`,bad)
-      +grp(`其余指标 <b style="color:#7b8794">${good.length}</b> 项`,good);
+      ks.map(k=>segChip(k,bad)).join('')||'<span class="lb">无</span>'}</div>`;
+    more.innerHTML=grp(`最近 3 次有异常 <b>${b.length}</b> 项`,b)
+      +grp(`其余指标 <b style="color:#7b8794">${g.length}</b> 项`,g);
     more.classList.toggle('on',segMoreOpen);
   }
   const cnt=document.getElementById('selCount');
@@ -1063,51 +1070,38 @@ function seriesOf(k){
   return [...m.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([date,v])=>({date,v}));
 }
 
-/* 最近 3 次有数据的日期（报告或补录都算） */
-function recentRecDates(n){
-  const ds=new Set();
-  Object.keys(DB.rpt||{}).forEach(d=>{ if(rptItems(d).length) ds.add(d); });
-  Object.keys(DB.labs||{}).forEach(d=>{ if(Object.keys(DB.labs[d]||{}).length) ds.add(d); });
-  return [...ds].sort().slice(-n);
-}
-/* 某指标的最新一次记录（数值或定性结果都支持） */
-function latestOf(k){
-  const h=last(k);
-  if(h) return {v:h.v,date:h.date,bad:flagOf(h.v,META[k])};
-  let out=null;
-  Object.keys(DB.rpt||{}).sort().reverse().some(d=>{
-    const it=rptItems(d).find(x=>canonOf(x)===k);
-    if(it){ out={v:it.v,date:d,bad:isAbn(it)?'bad':null}; return true; }
-    return false;
-  });
-  return out;
-}
-/* 我的目标值：只列「最近 3 次记录中有不达标」的条目，仍按化验类型/归类分组 */
+/* 我的目标值：与趋势板块同一规则——某指标最近 3 次记录中有一次不达标才展示；
+   每个指标列出最后三次记录的值，左→右按时间由远及近 */
 function renderGoals(){
   const el=document.getElementById('goalTb'); if(!el) return;
   const cnt=document.getElementById('goalCount');
-  const badKeys=new Set();
-  recentRecDates(3).forEach(d=>{
-    rptItems(d).forEach(it=>{ if(isAbn(it)) badKeys.add(canonOf(it)); });
-    Object.keys(DB.labs[d]||{}).forEach(k=>{ if(flagOf(DB.labs[d][k],META[k])) badKeys.add(k); });
-  });
+  const rec=allRecords();
+  const badKeys=recentBadKeys(rec,3);
   let shown=0;
   const html=canonGroups().map(g=>{
     const items=g.items.filter(o=>badKeys.has(o.k));
     if(!items.length) return '';
     shown+=items.length;
-    const head=`<tr><td colspan="3" style="background:#f2f6f9;color:#2f6fb5;font-size:12px;font-weight:600;padding:7px 9px">${esc(g.lab+' · '+g.cat)}</td></tr>`;
+    const head=`<tr><td colspan="5" style="background:#f2f6f9;color:#2f6fb5;font-size:12px;font-weight:600;padding:7px 9px">${esc(g.lab+' · '+g.cat)}</td></tr>`;
     const rows=items.map(o=>{
-      const m=META[o.k], l=latestOf(o.k);
-      const v=l?(typeof l.v==='number'?fmt(l.v):String(l.v)):'—';
+      const m=META[o.k];
+      const r=rec.get(o.k)||new Map();
+      const ds=[...r.keys()].sort().slice(-3);        // 由远及近
+      while(ds.length<3) ds.unshift('');              // 不足三次时留空，保证靠右对齐
+      const cells=ds.map(d=>{
+        if(!d) return '<td class="goal-v"></td>';
+        const x=r.get(d);
+        const vv=typeof x.v==='number'?fmt(x.v):String(x.v);
+        return `<td class="goal-v${x.bad?' bad':''}"><span class="v">${esc(vv)}</span><span class="d">${esc(d.slice(5))}</span></td>`;
+      }).join('');
       return `<tr><td><b>${esc(o.n)}</b></td>
         <td style="color:#7b8794;font-size:12px">${m&&m.goal?esc(m.goal):'<span class="muted">未设目标</span>'}</td>
-        <td style="text-align:right;font-weight:600${l&&l.bad?';color:#d93a3a':''}">${esc(v)}</td></tr>`;
+        ${cells}</tr>`;
     }).join('');
     return head+rows;
   }).join('');
   if(cnt) cnt.textContent=shown?`最近 3 次有异常 ${shown} 项`:'';
-  el.innerHTML=html||'<tr><td colspan="3" class="empty" style="padding:14px 8px;text-align:center">最近 3 次记录中没有不达标指标 ✅</td></tr>';
+  el.innerHTML=html||'<tr><td colspan="5" class="empty" style="padding:14px 8px;text-align:center">最近 3 次记录中没有不达标指标 ✅</td></tr>';
 }
 
 function drawChart(){
@@ -1116,7 +1110,7 @@ function drawChart(){
     if(chart){ chart.clear(); }
     const an=document.getElementById('axisNote'); if(an) an.classList.remove('on');
     const tip=document.getElementById('chartTip');
-    if(tip) tip.innerHTML='暂无持续异常（≥3 次不合格）的指标。点上方 <b>＋</b> 选择要看的指标。';
+    if(tip) tip.innerHTML='最近 3 次记录中没有不达标指标。点上方 <b>＋</b> 选择要看的指标。';
     return;
   }
   // 统一时间轴：所有选中指标出现过的日期并集
@@ -3435,7 +3429,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.7.7 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.7.8 · 2026-10-31';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
