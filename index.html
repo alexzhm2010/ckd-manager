@@ -483,13 +483,13 @@ const daysBetween=(a,b)=>Math.round((new Date(b)-new Date(a))/86400000);
 
 /* ==================== 指标元数据 ==================== */
 const META={
-  egfr:{n:'eGFR 肾功能',u:'ml/min',ref:[80,120],goal:'力争稳住 24 以上，避免跌破 15',dir:'high'},
+  egfr:{n:'eGFR 肾功能',u:'ml/min',ref:[90,120],goal:'力争稳住 24 以上，避免跌破 15',dir:'high'},
   crea:{n:'血肌酐 Crea',u:'μmol/L',ref:[57,97],goal:'尽量维持在 250 以下',dir:'low'},
   upro:{n:'24h尿蛋白',u:'g/24h',ref:[0,0.15],goal:'目标 <1.0g，先争取稳定下降',dir:'low'},
   acr:{n:'尿ACR',u:'mg/g',ref:[0,30],goal:'目标 <300',dir:'low'},
   malb:{n:'尿微量白蛋白',u:'mg/L',ref:[0,30],goal:'持续下降',dir:'low'},
   k:{n:'血钾 K',u:'mmol/L',ref:[3.5,5.3],goal:'<5.0，超过 5.5 需紧急处理',dir:'low'},
-  ua:{n:'尿酸 UA',u:'μmol/L',ref:[214,488],goal:'<360（有痛风史）',dir:'low'},
+  ua:{n:'尿酸 UA',u:'μmol/L',ref:[208,428],goal:'<360（有痛风史）',dir:'low'},
   hco3:{n:'碳酸氢盐',u:'mmol/L',ref:[22,29],goal:'≥22，低于则提示酸中毒',dir:'high'},
   ca:{n:'血钙 Ca',u:'mmol/L',ref:[2.11,2.52],goal:'保持正常',dir:'range'},
   p:{n:'血磷 P',u:'mmol/L',ref:[0.85,1.51],goal:'<1.45',dir:'low'},
@@ -498,9 +498,9 @@ const META={
   alb:{n:'白蛋白',u:'g/L',ref:[40,55],goal:'≥40，保证营养',dir:'high'},
   urea:{n:'血尿素',u:'mmol/L',ref:[3.1,8.0],goal:'尽量下降',dir:'low'},
   cysc:{n:'胱抑素C',u:'mg/L',ref:[0.59,1.16],goal:'持续监测',dir:'low'},
-  tc:{n:'总胆固醇',u:'mmol/L',ref:[3.12,6.24],goal:'<5.2',dir:'low'},
-  tg:{n:'甘油三酯',u:'mmol/L',ref:[0.4,1.8],goal:'<1.7',dir:'low'},
-  ldl:{n:'低密度脂蛋白LDL',u:'mmol/L',ref:[0,3.12],goal:'<2.6（心血管高危）',dir:'low'},
+  tc:{n:'总胆固醇',u:'mmol/L',ref:[2.8,5.2],goal:'<5.2',dir:'low'},
+  tg:{n:'甘油三酯',u:'mmol/L',ref:[0.4,1.7],goal:'<1.7',dir:'low'},
+  ldl:{n:'低密度脂蛋白LDL',u:'mmol/L',ref:[0,3.37],goal:'<2.6（心血管高危）',dir:'low'},
 };
 const ORDER=['egfr','crea','upro','acr','k','ua','hgb','hco3','p','pth','tg','ldl','ca','alb','cysc','urea','malb','tc'];
 FACTS_READY=true;          // META / ORDER 已就绪，之后 save 可以安全地写 facts
@@ -906,12 +906,11 @@ function last(key){
   return h.length?h[h.length-1]:null;
 }
 function statusOf(key,v){
-  const m=META[key]||{};                     // 内置指标才有方向定义（越低越好/越高越好）
   const r=baselineRef(key);                   // 阈值统一取固定基准表
-  if(!r||r.lo==null||r.hi==null) return 'ok';
-  if(m.dir==='low') return v>r.hi?'bad':'ok';
-  if(m.dir==='high') return v<r.lo?'bad':'ok';
-  return (v<r.lo||v>r.hi)?'bad':'ok';
+  if(!r||r.lo==null||r.hi==null||!isFinite(Number(v))) return 'ok';
+  const n=Number(v);
+  // 「达标」= 落在参考区间内；任一侧越界都算超范围（低钾、低血红蛋白同样危险）
+  return (n<r.lo||n>r.hi)?'bad':'ok';
 }
 function fmt(v){ return Math.abs(v)>=100?Math.round(v*10)/10 : Math.round(v*100)/100; }
 function dateStr(d){ if(!d) return '—'; const [y,m,dd]=d.split('-'); return m+'/'+dd; }
@@ -1014,7 +1013,12 @@ function allRecords(){
     if(!k) return;
     let r=m.get(k); if(!r){ r=new Map(); m.set(k,r); }
     const cur=r.get(d);
-    if(cur){ if(overwrite) cur.v=v; if(bad!=null) cur.bad=bad; }
+    if(cur){
+      if(overwrite){ cur.v=v; if(bad!=null) cur.bad=!!bad; }
+      // 同日既有数值补录、又有定性报告时（如尿葡萄糖 5.59 + “+++”），
+      // 不能让报告的文字异常标记去染色另一个数值，只以真正展示的数值判断
+      else if(bad!=null&&typeof cur.v!=='number') cur.bad=!!bad;
+    }
     else r.set(d,{v,bad:!!bad});
   };
   Object.keys(DB.labs||{}).forEach(d=>{
@@ -1296,9 +1300,13 @@ function drawChart(){
 function addLab(){
   const d=document.getElementById('labDate').value||today();
   const k=document.getElementById('labKey').value;
-  const v=+document.getElementById('labVal').value;
+  const raw=(document.getElementById('labVal').value||'').trim();
   if(!k) return toast('请选择指标');
-  if(!v&&v!==0) return toast('请输入数值');
+  if(raw==='') return toast('请输入数值');
+  const v=Number(raw);
+  if(!isFinite(v)) return toast('请输入有效数值');
+  const bref=baselineRef(k);
+  if(!bref||bref.lo==null||bref.hi==null) return toast('该指标不支持数值补录');
   const dm=DICTBYKEY.get(k);
   const nm=(META[k]&&META[k].n)||(dm&&dm.n)||k;
   // 同日同项已存在时允许覆盖，不再提示「先删除旧记录」——页面里并没有删除入口
@@ -1369,7 +1377,7 @@ const EXCL={
   ca:['离子','磷'],
   p:['PTH','甲旁','磷酸酶','磷脂'],
   k:['钠','氯','钙'],
-  ua:['ACR','比'],
+  ua:['ACR','比','尿'],
   tc:['甘油','LDL','HDL','低密度','高密度'],
   tg:['LDL','HDL','胆固'],
   ldl:['HDL','高密度'],
@@ -2050,6 +2058,8 @@ function numTokens(s){
     if(/[A-Za-z\u4e00-\u9fa5^%]/.test(pre)) continue;         // 粘在字/字母/单位上
     if(/[A-Za-z^]/.test(post)) continue;                     // 10^9/L、2-MG
     if(post==='-'&&/[A-Za-z]/.test(post2)) continue;
+    // 名字里的连字符编号不是结果：「抗Ro-52抗体」「抗Jo-1抗体」「Scl-70」曾把 52/1/70 当成数值
+    if(pre==='-'&&/[A-Za-z0-9\u4e00-\u9fa5]/.test(s[start-2]||'')) continue;
     const v=parseFloat(m[0].replace(/\s/g,'').replace(/^[<>≤≥]/,''));
     if(!isFinite(v)) continue;
     out.push({v,start,end});
@@ -2094,14 +2104,10 @@ function cleanItemName(s){
 /* 小数点丢失修正：OCR 常把 333.0 读成 3330、把 2.33 读成 233。
    如果原值超出参考范围、但缩小 10/100 倍后正好落在范围内，基本可判定是小数点丢失。 */
 function fixDecimal(v, lo, hi){
-  if(v>=lo&&v<=hi) return null;
-  // 只修「明显多打了一位」的：值本身到了三位数，或参考区间就在小数点后
-  // （15 与 0-5 这种是真的偏高，不能当成 1.5）
-  if(!(v>=100||hi<2)) return null;
-  for(const k of [10,100,1000]){
-    const t=Math.round(v/k*1000)/1000;
-    if(t>=lo&&t<=hi) return {v:t, k};
-  }
+  /* 不再自动缩放。CKD 患者真实的高值（尿微量白蛋白 2230 mg/L、ACR 2479 mg/g 等）
+     与「OCR 丢小数点」的形态完全无法区分：2230 除以 100 正好落回参考区间，
+     一旦自动修正就会把真实异常改成正常，比误报偏高危险得多。
+     原始读数保留，按基准区间标记异常；确需修正时由用户手动改。 */
   return null;
 }
 
@@ -2632,7 +2638,7 @@ const metaOf=k=>{
   return (r&&r.lo!=null&&r.hi!=null)?Object.assign({},m,{ref:[r.lo,r.hi],refText:r.txt||''}):m;
 };
 function setDict(rows){
-  DICT=[]; DICTBYKEY.clear(); ASSIGN_BASE='';
+  DICT=[]; DICTBYKEY.clear(); DICTNAME.clear(); ASSIGN_BASE='';
   const seen=new Set();
   (rows||[]).forEach(r=>{
     const k=String(r.canon||'').trim();
@@ -2641,6 +2647,8 @@ function setDict(rows){
     const d={k,n:String(r.std_name||k),u:r.unit||'',lab:r.lab_type||'其他',cat:r.category||'其他',
       lo:r.ref_lo==null?null:Number(r.ref_lo),hi:r.ref_hi==null?null:Number(r.ref_hi),txt:String(r.ref_text||'')};
     DICT.push(d); DICTBYKEY.set(k,d);
+    const dn=dictKey(d.n);
+    if(dn&&!DICTNAME.has(dn)) DICTNAME.set(dn,k);
   });
   DICT.sort((a,b)=>labRank(a.lab)-labRank(b.lab)||a.lab.localeCompare(b.lab,'zh')||
     String(a.cat).localeCompare(String(b.cat),'zh')||String(a.n).localeCompare(String(b.n),'zh'));
@@ -2677,10 +2685,27 @@ function buildAssignBase(){
     g.items.map(o=>`<option value="${esc(o.k)}">${esc(o.n)}</option>`).join('')+'</optgroup>'
   ).join('') + '<option value="__custom">＋自定义…</option>';
 }
-/* 手动补录只能选标准指标（不带“未归类/自定义”） */
+/* 手动补录只能选「可数值化」的标准指标：定性项（阴性/+++、颜色、清晰度等）
+   没有数值参考区间，录成数字会造成异常判断失真，因此不进补录下拉 */
+let METRIC_BASE='';
+function buildMetricBase(){
+  return canonGroups().map(g=>{
+    const items=g.items.filter(o=>{
+      const r=baselineRef(o.k);
+      return r&&r.lo!=null&&r.hi!=null;
+    });
+    if(!items.length) return '';
+    return `<optgroup label="${esc(g.lab+' · '+g.cat)}">`+
+      items.map(o=>`<option value="${esc(o.k)}">${esc(o.n)}</option>`).join('')+'</optgroup>';
+  }).join('');
+}
 function metricOptions(cur){
-  return assignOptions(cur||'').replace('<option value="">未归类</option>','')
-    .replace('<option value="__custom">＋自定义…</option>','');
+  if(!METRIC_BASE) METRIC_BASE=buildMetricBase();
+  if(!cur) return METRIC_BASE;
+  const tag='value="'+esc(cur)+'"';
+  const i=METRIC_BASE.indexOf(tag);
+  if(i<0) return METRIC_BASE;
+  return METRIC_BASE.slice(0,i)+tag+' selected'+METRIC_BASE.slice(i+tag.length);
 }
 function assignOptions(cur){
   if(!ASSIGN_BASE) ASSIGN_BASE=buildAssignBase();
@@ -2694,12 +2719,16 @@ function assignOptions(cur){
 /* 学到的别名（不同医院的写法）：归一化写法 → 规范指标 key。
    存在 facts 表里（kind='alias'），跟账号走；换设备、换浏览器都还在 */
 let CANONMAP=new Map();
+let DICTNAME=new Map();        // 字典标准名（归一后）→ canon，用于自动归类 24 小时尿等字典项
 const aliasKey=n=>String(normName(n)||'').toLowerCase();
+/* 字典匹配用的写法：把「24小时」统一成「24h」，两种写法都能对上同一字典项；
+   别名 uid/CANONMAP 仍用 aliasKey，避免改写法后生成重复的别名行 */
+const dictKey=n=>aliasKey(n).replace(/24\s*小时/g,'24h');
 function buildCanonMap(rows){
   CANONMAP=new Map();
   (rows||[]).forEach(r=>{
     if(!r||r.kind!=='alias'||!r.name) return;
-    const a=aliasKey(r.name||'');
+    const a=dictKey(r.name||'');
     if(!a) return;
     if(r.key&&isCanonKey(r.key)) CANONMAP.set(a,r.key);
     // 负别名（key 为空 + meta.neg）：这个名字明确「未归类」，不再按静态别名表自动归类
@@ -2721,12 +2750,16 @@ function registerMetrics(obj){
 }
 function registerMetric(k,m){ const o={}; o[k]=m; registerMetrics(o); }
 /* 这个名字是否被用户明确设为「未归类」 */
-const isNegAlias=n=>{ const a=aliasKey(n); return !!a&&CANONMAP.has(a)&&!CANONMAP.get(a); };
+const isNegAlias=n=>{ const a=dictKey(n); return !!a&&CANONMAP.has(a)&&!CANONMAP.get(a); };
 /* 写法 → 规范指标 key：先查学到的别名，再用静态别名表兜底 */
 function resolveCanon(n){
-  const nm=aliasKey(n);
+  const nm=dictKey(n);
   if(!nm) return null;
-  if(CANONMAP.has(nm)) return CANONMAP.get(nm);
+  if(CANONMAP.has(nm)) return CANONMAP.get(nm);   // 学到的别名，含空串（明确不归类）
+  // 字典标准名直接命中：24h尿钙/尿钾/24h尿尿酸这类名字不会再被静态别名
+  // 错认成血钙/血钾/血尿酸，也不会因为「24小时」与「24h」写法不同而漏归类
+  const dk=DICTNAME.get(nm);
+  if(dk) return dk;
   return keyOfName(n);
 }
 /* 一项的规范键：核对时指定的归属 > 学到的别名 > 静态别名 > 归一化名称（未归类） */
@@ -3401,7 +3434,8 @@ function orphanKeys(){
   Object.keys(META).forEach(k=>all.add(k));
   RPTIDX.forEach((_,k)=>all.add(k));
   LABIDX.forEach((_,k)=>all.add(k));
-  return [...all].filter(k=>!covered.has(k));
+  // 只把「真的有记录」的未归类指标算进本组，已登记但从未录入的自定义指标不计入分母
+  return [...all].filter(k=>!covered.has(k)&&(RPTIDX.has(k)||LABIDX.has(k)));
 }
 /* 「近三次有异常」与「超期 3 倍」统一在这里算，整页只算一次 */
 function reviewCtx(){
@@ -3622,7 +3656,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.10.1 · 2026-11-01';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.10.3 · 2026-11-01';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
