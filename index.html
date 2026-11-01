@@ -323,7 +323,7 @@ border-radius:50%;animation:spin .85s linear infinite}
   <div class="card">
     <h2><span class="t"><span class="bar"></span>化验报告（全部项目）</span><span class="muted" id="rptCount"></span></h2>
     <div class="muted" style="font-size:11.5px;margin-bottom:9px;line-height:1.65">
-      每份报告默认折叠，只显示日期、医院、科室与项数；点「展开」按「指标 / 结果 / 单位 / 参考范围」列出这份报告的全部标准指标。指标名称已在导入或补录时自动归一，这里只作查看。
+      每份报告默认折叠，只显示日期、医院、科室与项数；点「展开」按「指标 / 结果 / 单位 / 参考范围」列出这份报告的全部标准指标。指标名称已在导入或补录时自动归一；参考范围统一显示标准基准区间，异常判断也以基准表为准。
     </div>
     <div class="mt-bar">
       <input id="rptQ" placeholder="筛选指标名称（标准名或原始名）" oninput="rptSearch(this.value)">
@@ -639,10 +639,12 @@ function deriveFacts(db,touch){
       const uid='lab|'+date+'|'+key;
       const prev=FACTMAP.get(uid);
       const changed=!prev||prev.value!==v;
+      const bref=baselineRef(key);
       rows.push({
         uid, kind:'lab', date, key, canon:key, name:m.n||key, value:v, unit:m.u||'',
-        ref_lo:m.ref?m.ref[0]:null, ref_hi:m.ref?m.ref[1]:null,
-        flag:flagOf(v,m),
+        ref_lo:bref&&bref.lo!=null?bref.lo:(m.ref?m.ref[0]:null),
+        ref_hi:bref&&bref.hi!=null?bref.hi:(m.ref?m.ref[1]:null),
+        flag:flagWithBase(key,v,m),
         source:prev&&!changed?(prev.source||'manual'):'manual',
         updated_at:stamp(prev,changed), created_at:prev?prev.created_at:at
       });
@@ -835,7 +837,7 @@ async function cloudPullDict(){
   const size=500; let from=0, all=[];
   while(true){
     const {data,error}=await sb.from('rpt_dict')
-      .select('lab_type,category,std_name,canon,unit').range(from,from+size-1);
+      .select('lab_type,category,std_name,canon,unit,ref_lo,ref_hi,ref_text').range(from,from+size-1);
     if(error) throw error;
     if(!data||!data.length) break;
     all=all.concat(data);
@@ -904,11 +906,12 @@ function last(key){
   return h.length?h[h.length-1]:null;
 }
 function statusOf(key,v){
-  const m=META[key]; if(!m) return 'ok';
-  if(!m.ref||m.ref.length<2) return 'ok';   // 自定义指标没读到参考区间时不做判定
-  if(m.dir==='low') return v>m.ref[1]?'bad':'ok';
-  if(m.dir==='high') return v<m.ref[0]?'bad':'ok';
-  return (v<m.ref[0]||v>m.ref[1])?'bad':'ok';
+  const m=META[key]||{};                     // 内置指标才有方向定义（越低越好/越高越好）
+  const r=baselineRef(key);                   // 阈值统一取固定基准表
+  if(!r||r.lo==null||r.hi==null) return 'ok';
+  if(m.dir==='low') return v>r.hi?'bad':'ok';
+  if(m.dir==='high') return v<r.lo?'bad':'ok';
+  return (v<r.lo||v>r.hi)?'bad':'ok';
 }
 function fmt(v){ return Math.abs(v)>=100?Math.round(v*10)/10 : Math.round(v*100)/100; }
 function dateStr(d){ if(!d) return '—'; const [y,m,dd]=d.split('-'); return m+'/'+dd; }
@@ -920,7 +923,7 @@ function renderHome(){
     {k:'egfr',lb:'eGFR 肾功能'},{k:'crea',lb:'血肌酐'},{k:'upro',lb:'24h尿蛋白'},{k:'k',lb:'血钾'}
   ];
   box.innerHTML=cards.map(c=>{
-    const l=last(c.k); const m=META[c.k];
+    const l=last(c.k); const m=metaOf(c.k);
     if(!l) return '';
     const st=statusOf(c.k,l.v);
     const tag = st==='bad'?'超范围':'达标';
@@ -928,7 +931,7 @@ function renderHome(){
       <div class="lb">${c.lb}</div>
       <span class="tag ${st}">${tag}</span>
       <div class="val">${fmt(l.v)}<span class="un">${m.u}</span></div>
-      <div class="hint">${dateStr(l.date)} · 参考 ${m.ref[0]}-${m.ref[1]}</div>
+      <div class="hint">${dateStr(l.date)} · 参考 ${m.ref?`${m.ref[0]}-${m.ref[1]}`:'—'}</div>
     </div>`;
   }).join('');
 
@@ -1015,7 +1018,7 @@ function allRecords(){
     else r.set(d,{v,bad:!!bad});
   };
   Object.keys(DB.labs||{}).forEach(d=>{
-    Object.keys(DB.labs[d]||{}).forEach(k=>put(k,d,DB.labs[d][k],!!flagOf(DB.labs[d][k],META[k]),true));
+    Object.keys(DB.labs[d]||{}).forEach(k=>put(k,d,DB.labs[d][k],!!flagWithBase(k,DB.labs[d][k],META[k]),true));
   });
   Object.keys(DB.rpt||{}).forEach(d=>{
     rptItems(d).forEach(it=>{ const k=canonOf(it); put(k,d,it.v,isAbn(it),false); });
@@ -2405,21 +2408,31 @@ function rptItems(d){
   if(!r) return [];
   return Array.isArray(r)?r:(r.items||[]);
 }
-const isAbn=it=>it&&(it.st==='high'||it.st==='low');
+/* 异常方向：优先按固定基准区间判断；没有数值基准时（定性项等）沿用报告自带标记 */
+function abnDirOf(it){
+  if(!it) return null;
+  const k=canonOf(it);
+  const r=baselineRef(k);
+  const n=Number(it.v);
+  if(r&&r.lo!=null&&r.hi!=null&&isFinite(n)) return baseFlag(k,n);
+  return (it.st==='high'||it.st==='low')?it.st:null;
+}
+const isAbn=it=>!!abnDirOf(it);
 
 /* 单行只读：标准指标名称、结果、单位、参考范围；异常项红字/箭头/标签
    （名称与归类在导入/补录时已归一，这里只展示，不再提供编辑） */
 function rptRow(it){
-  const abn=isAbn(it);
+  const dir=abnDirOf(it), abn=!!dir;
   const k=canonOf(it);
   const label=isCanonKey(k)?canonLabel(k):String(it.n||'');
-  const mark=abn&&typeof it.v==='number'?(it.st==='high'?'↑':'↓'):'';   // 2+ / 阴性 不用再加箭头
+  const mark=abn&&typeof it.v==='number'?(dir==='high'?'↑':'↓'):'';   // 2+ / 阴性 不用再加箭头
   const fx=it.raw?`<span class="re-approx" title="原件读数 ${esc(it.raw)}，按参考区间修正">≈</span>`:'';
-  const tag=abn?`<span class="mt-tag">${it.st==='high'?'偏高':'偏低'}</span>`:'';
-  const rt=refTxt(it);
+  const tag=abn?`<span class="mt-tag">${dir==='high'?'偏高':'偏低'}</span>`:'';
+  const b=baselineRef(k);
+  const rt=b?(b.txt||`${b.lo}~${b.hi}`):refTxt(it);
   return `<div class="rpt-row${abn?' bad':''}">
     <span class="rr-n"><span class="nm" title="原始名称：${esc(it.n||'')}">${esc(label)}</span>${tag}</span>
-    <span class="rr-v">${esc(it.v)}${fx}${mark?`<span class="re-arrow" style="color:${it.st==='high'?'#d93a3a':'#0b6e99'}">${mark}</span>`:''}</span>
+    <span class="rr-v">${esc(it.v)}${fx}${mark?`<span class="re-arrow" style="color:${dir==='high'?'#d93a3a':'#0b6e99'}">${mark}</span>`:''}</span>
     <span class="rr-u">${esc(it.u||'—')}</span>
     <span class="rr-ref">${rt?esc(rt):''}</span>
   </div>`;
@@ -2585,8 +2598,34 @@ const labRank=l=>{ const i=LAB_ORDER.indexOf(l); return i<0?99:i; };
 /* 有效规范键：内置/自定义指标，或字典里已标准化的指标（不一定要进趋势图） */
 const isCanonKey=k=>!!k&&(!!META[k]||DICTBYKEY.has(k));
 const canonLabel=k=>{ const d=DICTBYKEY.get(k); return d?d.n:((META[k]&&META[k].n)||k); };
-/* 图表等处取指标名/单位：优先内置定义（有参考区间），否则用字典 */
-const metaOf=k=>META[k]||{n:((DICTBYKEY.get(k)||{}).n)||k,u:((DICTBYKEY.get(k)||{}).u)||'',goal:'',ref:null};
+/* 固定参考区间基准：rpt_dict 的 ref_lo/ref_hi/ref_text 优先，内置 META 只作兜底。
+   所有页面的异常判断都走这里，避免不同医院参考区间导致结论不一致 */
+function baselineRef(k){
+  const d=k?DICTBYKEY.get(k):null;
+  if(d&&((d.lo!=null&&d.hi!=null)||d.txt)) return {lo:d.lo,hi:d.hi,txt:d.txt};
+  const m=k?META[k]:null;
+  if(m&&m.ref&&m.ref.length>=2) return {lo:m.ref[0],hi:m.ref[1],txt:''};
+  return null;
+}
+function baseFlag(k,v){
+  const r=baselineRef(k);
+  if(!r||r.lo==null||r.hi==null) return null;
+  const n=Number(v); if(!isFinite(n)) return null;
+  return n>r.hi?'high':(n<r.lo?'low':null);
+}
+/* 有固定基准就按基准；没有基准（定性项/字典缺失）才退回报告自带标记或内置规则 */
+function flagWithBase(k,v,m){
+  const r=baselineRef(k);
+  if(r&&r.lo!=null&&r.hi!=null) return baseFlag(k,v);
+  return flagOf(v,m);
+}
+/* 图表等处取指标名/单位/参考区间：名和单位优先内置定义，参考区间统一用基准表 */
+const metaOf=k=>{
+  const d=DICTBYKEY.get(k)||{};
+  const m=META[k]||{n:d.n||k,u:d.u||'',goal:'',ref:null};
+  const r=baselineRef(k);
+  return (r&&r.lo!=null&&r.hi!=null)?Object.assign({},m,{ref:[r.lo,r.hi],refText:r.txt||''}):m;
+};
 function setDict(rows){
   DICT=[]; DICTBYKEY.clear(); ASSIGN_BASE='';
   const seen=new Set();
@@ -2594,7 +2633,8 @@ function setDict(rows){
     const k=String(r.canon||'').trim();
     if(!k||seen.has(k)) return;
     seen.add(k);
-    const d={k,n:String(r.std_name||k),u:r.unit||'',lab:r.lab_type||'其他',cat:r.category||'其他'};
+    const d={k,n:String(r.std_name||k),u:r.unit||'',lab:r.lab_type||'其他',cat:r.category||'其他',
+      lo:r.ref_lo==null?null:Number(r.ref_lo),hi:r.ref_hi==null?null:Number(r.ref_hi),txt:String(r.ref_text||'')};
     DICT.push(d); DICTBYKEY.set(k,d);
   });
   DICT.sort((a,b)=>labRank(a.lab)-labRank(b.lab)||a.lab.localeCompare(b.lab,'zh')||
@@ -3577,7 +3617,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.9.6 · 2026-11-01';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.10.0 · 2026-11-01';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
