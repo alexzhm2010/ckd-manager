@@ -1130,6 +1130,11 @@ function renderGoals(){
     const head=`<tr><td colspan="5" style="background:#f2f6f9;color:#2f6fb5;font-size:12px;font-weight:600;padding:7px 9px">${esc(g.lab+' · '+g.cat)}</td></tr>`;
     const rows=items.map(o=>{
       const m=META[o.k];
+      const b=baselineRef(o.k);
+      /* 内置 18 项有个人目标；其余指标没有个人目标，回退显示固定参考区间，避免整列“未设目标” */
+      const goalTxt=m&&m.goal?esc(m.goal):(b&&b.lo!=null&&b.hi!=null
+        ?`<span style="color:#7b8794">参考 ${b.lo}~${b.hi}</span>`
+        :(b&&b.txt?`<span style="color:#7b8794">参考 ${esc(b.txt)}</span>`:'<span class="muted">无参考区间</span>'));
       const r=rec.get(o.k)||new Map();
       const ds=[...r.keys()].sort().slice(-3);        // 由远及近
       while(ds.length<3) ds.unshift('');              // 不足三次时留空，保证靠右对齐
@@ -1140,7 +1145,7 @@ function renderGoals(){
         return `<td class="goal-v${x.bad?' bad':''}"><span class="v">${esc(vv)}</span><span class="d">${esc(d.slice(5))}</span></td>`;
       }).join('');
       return `<tr><td><b>${esc(o.n)}</b></td>
-        <td style="color:#7b8794;font-size:12px">${m&&m.goal?esc(m.goal):'<span class="muted">未设目标</span>'}</td>
+        <td style="font-size:12px">${goalTxt}</td>
         ${cells}</tr>`;
     }).join('');
     return head+rows;
@@ -3617,7 +3622,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.10.0 · 2026-11-01';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.10.1 · 2026-11-01';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
