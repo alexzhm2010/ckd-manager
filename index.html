@@ -258,10 +258,13 @@ padding:6px 0;border-bottom:1px dotted #eef1f4;font-size:12px}
 .rev-s.near{color:#c8933f}
 .rev-s.ok,.rev-s.none{color:#9aa6b2}
 .rev-cat{margin-top:11px}
-.rev-cat-h{display:flex;align-items:center;gap:8px;
+.rev-cat-h{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;
 padding:0 1px 5px;border-bottom:1px solid #e6ebf0;margin-bottom:2px}
-.rev-cat-h b{font-size:12.5px;color:#2f6fb5;flex:1;min-width:0;line-height:1.4}
+.rev-cat-h b{font-size:12.5px;color:#2f6fb5;flex:1 1 auto;min-width:110px;line-height:1.4}
 .rev-cat-d{font-size:11px;color:#7b8794;white-space:nowrap}
+.rev-cat-od{font-size:10.5px;line-height:1.5;padding:1px 7px;border-radius:9px;
+background:#fff2df;color:#9a5b0e;font-weight:600;white-space:nowrap}
+.rev-cat-od.red{background:#fdecec;color:#b32222}
 .rev-cat-h .mini{padding:2px 9px;font-size:10.5px;border-radius:10px}
 .rev-others{text-align:right;margin-top:5px}
 .rev-empty{font-size:11.5px;color:#a7b2be;padding:6px 1px}
@@ -3557,8 +3560,9 @@ function revRow(it){
     <span class="rev-s ${s.cls}">${s.txt}</span>
   </div>`;
 }
-function renderRevList(items){
+function renderRevList(items,all){
   const box=document.getElementById('revList'); if(!box) return;
+  const info={}; (all||[]).forEach(g=>info[g.g.id]=g);
   let html='';
   // 大类与「复查周期设置」完全一致（CHECK_GROUPS），每类单独折叠
   CHECK_GROUPS.forEach(g=>{
@@ -3568,10 +3572,14 @@ function renderRevList(items){
     const rest=arr.filter(it=>!it.bad);
     const open=revCatOpenState(g.id,abn.length>0);
     const last=arr.reduce((m,it)=>it.last&&it.last>m?it.last:m,'');
+    const gd=info[g.id]?info[g.id].gdays:0;
+    const used=last&&gd>0?daysBetween(last,today()):null;
+    const od=used!=null&&used>gd?used-gd:0;
     html+=`<div class="rev-cat">
       <div class="rev-cat-h">
         <b>${esc(g.n)}</b>
         <span class="rev-cat-d">${last||'—'}</span>
+        ${od?`<span class="rev-cat-od${used>gd*3?' red':''}">超期 ${od} 天</span>`:''}
         <button class="mini" onclick="toggleRevCat('${g.id}',${abn.length?1:0})">${open?'收起':'展开'}</button>
       </div>`;
     if(open){
@@ -3602,7 +3610,7 @@ function renderVisit(){
   const all=CHECK_GROUPS.map(g=>groupInfo(g,ctx));
   const items=revItems(all,ctx);
   renderRevHero(items);
-  renderRevList(items);
+  renderRevList(items,all);
   renderRevSettings();
 }
 /* ==================== 知识页 ==================== */
@@ -3724,7 +3732,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.11.1 · 2026-11-03';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.11.2 · 2026-11-03';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
