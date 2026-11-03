@@ -238,28 +238,10 @@ padding:1px 3px;color:var(--pri);font-family:inherit;vertical-align:1px;flex:0 0
 border-radius:16px;padding:18px;box-shadow:0 5px 18px rgba(11,79,110,.22)}
 .rev-hero-t{font-size:20px;font-weight:700;letter-spacing:.3px}
 .rev-hero-d{font-size:12.5px;opacity:.9;margin-top:3px}
-.rev-hero-f{font-size:12.5px;line-height:1.6;margin-top:12px;padding-top:11px;
-border-top:1px solid rgba(255,255,255,.2)}
 .rev-hero-warn{margin-top:9px;font-size:12px;line-height:1.5;background:rgba(255,255,255,.14);
 border-radius:9px;padding:7px 10px}
 .rev-hero-warn.red{background:rgba(190,45,45,.78);font-weight:600}
 .rev-hero-warn.ok{background:rgba(255,255,255,.1);opacity:.85}
-.rev-fr{display:grid;grid-template-columns:1.15fr .95fr 1.25fr;gap:8px;align-items:center;
-padding:9px 0;border-bottom:1px dotted #e6ebf0;font-size:13px}
-.rev-fr:first-child{padding-top:0}
-.rev-fr:last-child{border-bottom:none;padding-bottom:0}
-.rev-fr .rev-fn b{display:block;font-size:13.5px;line-height:1.35}
-.rev-fr .rev-fn span{font-size:10.5px;color:#93a1b0}
-.rev-fr.bad .rev-fn b{color:#b32222}
-.rev-fr .rev-fv{text-align:right}
-.rev-fr .rev-fv b{display:block;font-size:14px}
-.rev-fr .rev-fv span{display:block;font-size:10.5px;color:#93a1b0}
-.rev-fr .rev-fs{font-size:11px;text-align:right;line-height:1.45}
-.rev-fr .rev-fs.red{color:#b32222;font-weight:700}
-.rev-fr .rev-fs.amber{color:#a06a12}
-.rev-fr .rev-fs.warn{color:#a06a12}
-.rev-fr .rev-fs.near{color:#c8933f}
-.rev-fr .rev-fs.ok,.rev-fr .rev-fs.none{color:#93a1b0}
 .rev-li{display:grid;grid-template-columns:1.25fr .7fr .9fr 1.15fr;gap:7px;align-items:center;
 padding:6px 0;border-bottom:1px dotted #eef1f4;font-size:12px}
 .rev-li:last-child{border-bottom:none}
@@ -275,11 +257,13 @@ padding:6px 0;border-bottom:1px dotted #eef1f4;font-size:12px}
 .rev-s.warn{color:#a06a12}
 .rev-s.near{color:#c8933f}
 .rev-s.ok,.rev-s.none{color:#9aa6b2}
-.rev-cat{margin-top:12px}
-.rev-cat-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
-padding:0 1px 4px;border-bottom:1px solid #e6ebf0;margin-bottom:2px}
-.rev-cat-h b{font-size:12.5px;color:#2f6fb5}
-.rev-cat-h span{font-size:10.5px;color:#93a1b0}
+.rev-cat{margin-top:11px}
+.rev-cat-h{display:flex;align-items:center;gap:8px;
+padding:0 1px 5px;border-bottom:1px solid #e6ebf0;margin-bottom:2px}
+.rev-cat-h b{font-size:12.5px;color:#2f6fb5;flex:1;min-width:0;line-height:1.4}
+.rev-cat-d{font-size:11px;color:#7b8794;white-space:nowrap}
+.rev-cat-h .mini{padding:2px 9px;font-size:10.5px;border-radius:10px}
+.rev-others{text-align:right;margin-top:5px}
 .rev-empty{font-size:11.5px;color:#a7b2be;padding:6px 1px}
 .rev-set-h{font-size:11.5px;color:#2f6fb5;font-weight:600;margin:10px 0 2px}
 .rev-set-row{display:flex;align-items:center;gap:10px;padding:5px 0;
@@ -447,11 +431,7 @@ border-radius:50%;animation:spin .85s linear infinite}
 <section class="page" id="p-visit">
   <div class="card rev-hero" id="revHero"></div>
   <div class="card">
-    <h2><span class="t"><span class="bar"></span>本次重点</span><span class="muted">按紧急程度排序 · 最多 5 项</span></h2>
-    <div id="revFocus"></div>
-  </div>
-  <div class="card">
-    <h2><span class="t"><span class="bar"></span>完整检查清单</span><span id="revListBtn"></span></h2>
+    <h2><span class="t"><span class="bar"></span>完整检查清单</span><span class="muted">按大类折叠 · 默认显示异常项</span></h2>
     <div id="revList"></div>
   </div>
   <div class="card">
@@ -3497,19 +3477,13 @@ function groupInfo(g,ctx){
   const abn=items.filter(it=>it.bad);
   return {g,gdays:gd,items,total:keys.length,lastDate,days,st,abn,urgent:abn.length>0||st==='over3'};
 }
-/* 复查页 v1.11：行动卡 + 紧急度排序 + 折叠的完整清单/周期设置。
+/* 复查页 v1.11：行动卡 + 按大类折叠的完整清单 + 折叠的周期设置。
    判断全部落在“单项”上：上次日期 + 自己的建议周期；大类只用于归类。 */
 const CKD4_CORE=new Set(['egfr','crea','urea','cysc','upro','acr','malb','k','hco3','hgb','ca','p','pth']);
-const REV_CATS=[
-  {n:'肾功能与电解质',ids:['renal'],extra:['k','hco3','x_血钠','血钠','x_氯','x_镁']},
-  {n:'尿液与蛋白',ids:['urine','u24']},
-  {n:'血常规',ids:['blood']},
-  {n:'骨代谢',ids:['bone'],only:['ca','p','pth']},
-  {n:'血脂与糖代谢',ids:['glu','lipid']},
-  {n:'其他（肝功能、心肌酶、免疫、凝血）',ids:['liver','enzyme','imm','coag','other']}
-];
-let revListOpen=false, revSetOpen=false;
-function toggleRevList(){ revListOpen=!revListOpen; renderVisit(); }
+let revCatOpen={}, revCatAll={}, revSetOpen=false;
+function revCatOpenState(id,hasAbn){ return revCatOpen[id]===undefined?!!hasAbn:!!revCatOpen[id]; }
+function toggleRevCat(id,hasAbn){ revCatOpen[id]=!revCatOpenState(id,hasAbn); renderVisit(); }
+function toggleRevCatAll(id){ revCatAll[id]=!revCatAll[id]; renderVisit(); }
 function toggleRevSet(){ revSetOpen=!revSetOpen; renderVisit(); }
 function revDueDate(last,days){
   const d=new Date(last+'T00:00:00'); d.setDate(d.getDate()+days);
@@ -3559,23 +3533,7 @@ function revItems(all,ctx){
   });
   return out;
 }
-function revFocusItems(items){
-  const sorted=items.slice().sort((a,b)=>
-    revRank(a)-revRank(b)||revStatus(b).overdue-revStatus(a).overdue||a.n.localeCompare(b.n,'zh'));
-  const urgent=sorted.filter(it=>revRank(it)<=4);
-  const core=sorted.filter(it=>CKD4_CORE.has(it.k)&&!urgent.includes(it));
-  return urgent.concat(core).slice(0,5);
-}
-function revFocusRow(it,i){
-  const s=revStatus(it);
-  const extra=(s.cls==='ok'&&it.max>0)?` · 剩 ${it.max-it.days} 天`:'';
-  return `<div class="rev-fr${s.cls==='red'?' bad':''}">
-    <div class="rev-fn"><b>${i+1}. ${esc(it.n)}</b><span>${revLabel(it.max)}</span></div>
-    <div class="rev-fv"><b>${it.last?esc(fmt(it.v)):'—'}</b><span>${it.last?dateStr(it.last)+(it.u?' · '+esc(it.u):''):'未查'}</span></div>
-    <div class="rev-fs ${s.cls}">${s.txt}${extra}</div>
-  </div>`;
-}
-function renderRevHero(items,focus){
+function renderRevHero(items){
   const el=document.getElementById('revHero'); if(!el) return;
   const core=items.filter(it=>CKD4_CORE.has(it.k)&&it.last&&it.max>0);
   const due=core.map(it=>revDueDate(it.last,it.max)).sort()[0]||'';
@@ -3588,15 +3546,7 @@ function renderRevHero(items,focus){
   let warn='<div class="rev-hero-warn ok">核心项目均在建议周期内</div>';
   if(reds.length) warn=`<div class="rev-hero-warn red">⚠ ${names(reds)} 异常且已超期</div>`;
   else if(ambers.length) warn=`<div class="rev-hero-warn">⚠ ${names(ambers)} 已超期 3 倍以上</div>`;
-  el.innerHTML=`<div class="rev-hero-t">${when}</div><div class="rev-hero-d">${sub}</div>
-    <div class="rev-hero-f">本次重点：${focus.map(x=>esc(x.n)).join(' · ')}</div>${warn}`;
-}
-function revCatItems(items,c){
-  return items.filter(it=>{
-    if(c.only) return c.only.includes(it.k);
-    if(c.extra) return c.ids.includes(it.groupId)||c.extra.includes(it.k);
-    return c.ids.includes(it.groupId);
-  });
+  el.innerHTML=`<div class="rev-hero-t">${when}</div><div class="rev-hero-d">${sub}</div>${warn}`;
 }
 function revRow(it){
   const s=revStatus(it);
@@ -3608,24 +3558,29 @@ function revRow(it){
   </div>`;
 }
 function renderRevList(items){
-  const btn=document.getElementById('revListBtn'),box=document.getElementById('revList');
-  if(!btn||!box) return;
-  btn.innerHTML=`<button class="mini" onclick="toggleRevList()">${revListOpen?'收起':'展开'}</button>`;
-  if(!revListOpen){
-    const rec=items.filter(it=>it.last).length;
-    box.innerHTML=`<div class="empty">已记录 ${rec} 项 · 展开查看按医学分类的全部项目</div>`;
-    return;
-  }
+  const box=document.getElementById('revList'); if(!box) return;
   let html='';
-  REV_CATS.forEach(c=>{
-    const arr=revCatItems(items,c).sort((a,b)=>revRank(a)-revRank(b)||a.n.localeCompare(b.n,'zh'));
-    const rec=arr.filter(x=>x.last).length;
-    html+=`<div class="rev-cat"><div class="rev-cat-h"><b>${c.n}</b><span>已记录 ${rec}/${arr.length}</span></div>`;
-    html+=arr.length?arr.map(revRow).join(''):'<div class="rev-empty">暂无相关指标</div>';
-    if(c.ids.includes('other')){
-      html+=CHECK_MANUAL.map(m=>`<div class="rev-li">
-        <span class="rev-n">${esc(m.n)}</span><span class="rev-d">—</span><span class="rev-v">—</span>
-        <span class="rev-s none">按医嘱 · ${revLabel(reviewDays(m.id,m.days))}</span></div>`).join('');
+  // 大类与「复查周期设置」完全一致（CHECK_GROUPS），每类单独折叠
+  CHECK_GROUPS.forEach(g=>{
+    const arr=items.filter(it=>it.groupId===g.id)
+      .sort((a,b)=>revRank(a)-revRank(b)||a.n.localeCompare(b.n,'zh'));
+    const abn=arr.filter(it=>it.bad);
+    const rest=arr.filter(it=>!it.bad);
+    const open=revCatOpenState(g.id,abn.length>0);
+    const last=arr.reduce((m,it)=>it.last&&it.last>m?it.last:m,'');
+    html+=`<div class="rev-cat">
+      <div class="rev-cat-h">
+        <b>${esc(g.n)}</b>
+        <span class="rev-cat-d">${last||'—'}</span>
+        <button class="mini" onclick="toggleRevCat('${g.id}',${abn.length?1:0})">${open?'收起':'展开'}</button>
+      </div>`;
+    if(open){
+      const showAll=!abn.length||revCatAll[g.id];
+      const list=showAll?arr:abn;
+      html+=list.length?list.map(revRow).join(''):'<div class="rev-empty">暂无检查记录</div>';
+      if(abn.length&&rest.length){
+        html+=`<div class="rev-others"><button class="mini" onclick="toggleRevCatAll('${g.id}')">${revCatAll[g.id]?'收起其他':`其他 ${rest.length} 项`}</button></div>`;
+      }
     }
     html+='</div>';
   });
@@ -3646,10 +3601,7 @@ function renderVisit(){
   const ctx=reviewCtx();
   const all=CHECK_GROUPS.map(g=>groupInfo(g,ctx));
   const items=revItems(all,ctx);
-  const focus=revFocusItems(items);
-  renderRevHero(items,focus);
-  const fb=document.getElementById('revFocus');
-  if(fb) fb.innerHTML=focus.length?focus.map(revFocusRow).join(''):'<div class="empty">暂无检查记录</div>';
+  renderRevHero(items);
   renderRevList(items);
   renderRevSettings();
 }
@@ -3772,7 +3724,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.11.0 · 2026-11-03';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.11.1 · 2026-11-03';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
