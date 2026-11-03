@@ -233,6 +233,58 @@ nav div.on{color:var(--pri2);font-weight:600}
 /* 复查周期下拉：按分类维护，随账号持久化 */
 .rv-sel{border:1px solid #dbe3ea;background:#fff;border-radius:9px;font-size:11px;
 padding:1px 3px;color:var(--pri);font-family:inherit;vertical-align:1px;flex:0 0 auto;width:84px}
+/* ===== 复查页 v1.11：行动卡 + 重点清单 + 折叠清单 ===== */
+.rev-hero{background:linear-gradient(135deg,#0b4f6e,#1287b8 65%,#17a2c4);color:#fff;
+border-radius:16px;padding:18px;box-shadow:0 5px 18px rgba(11,79,110,.22)}
+.rev-hero-t{font-size:20px;font-weight:700;letter-spacing:.3px}
+.rev-hero-d{font-size:12.5px;opacity:.9;margin-top:3px}
+.rev-hero-f{font-size:12.5px;line-height:1.6;margin-top:12px;padding-top:11px;
+border-top:1px solid rgba(255,255,255,.2)}
+.rev-hero-warn{margin-top:9px;font-size:12px;line-height:1.5;background:rgba(255,255,255,.14);
+border-radius:9px;padding:7px 10px}
+.rev-hero-warn.red{background:rgba(190,45,45,.78);font-weight:600}
+.rev-hero-warn.ok{background:rgba(255,255,255,.1);opacity:.85}
+.rev-fr{display:grid;grid-template-columns:1.15fr .95fr 1.25fr;gap:8px;align-items:center;
+padding:9px 0;border-bottom:1px dotted #e6ebf0;font-size:13px}
+.rev-fr:first-child{padding-top:0}
+.rev-fr:last-child{border-bottom:none;padding-bottom:0}
+.rev-fr .rev-fn b{display:block;font-size:13.5px;line-height:1.35}
+.rev-fr .rev-fn span{font-size:10.5px;color:#93a1b0}
+.rev-fr.bad .rev-fn b{color:#b32222}
+.rev-fr .rev-fv{text-align:right}
+.rev-fr .rev-fv b{display:block;font-size:14px}
+.rev-fr .rev-fv span{display:block;font-size:10.5px;color:#93a1b0}
+.rev-fr .rev-fs{font-size:11px;text-align:right;line-height:1.45}
+.rev-fr .rev-fs.red{color:#b32222;font-weight:700}
+.rev-fr .rev-fs.amber{color:#a06a12}
+.rev-fr .rev-fs.warn{color:#a06a12}
+.rev-fr .rev-fs.near{color:#c8933f}
+.rev-fr .rev-fs.ok,.rev-fr .rev-fs.none{color:#93a1b0}
+.rev-li{display:grid;grid-template-columns:1.25fr .7fr .9fr 1.15fr;gap:7px;align-items:center;
+padding:6px 0;border-bottom:1px dotted #eef1f4;font-size:12px}
+.rev-li:last-child{border-bottom:none}
+.rev-li.bad{background:#fdf4f4;margin:0 -6px;padding:6px;border-radius:6px}
+.rev-li .rev-n{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#3d4b59}
+.rev-li.bad .rev-n{color:#b32222;font-weight:600}
+.rev-li .rev-d{color:#93a1b0;font-size:11px;text-align:center}
+.rev-li .rev-v{font-weight:600;text-align:right;white-space:nowrap}
+.rev-li .rev-v i{font-style:normal;font-weight:400;color:#93a1b0;font-size:10px}
+.rev-li .rev-s{font-size:10.5px;text-align:right;line-height:1.35}
+.rev-s.red{color:#b32222;font-weight:700}
+.rev-s.amber{color:#a06a12}
+.rev-s.warn{color:#a06a12}
+.rev-s.near{color:#c8933f}
+.rev-s.ok,.rev-s.none{color:#9aa6b2}
+.rev-cat{margin-top:12px}
+.rev-cat-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+padding:0 1px 4px;border-bottom:1px solid #e6ebf0;margin-bottom:2px}
+.rev-cat-h b{font-size:12.5px;color:#2f6fb5}
+.rev-cat-h span{font-size:10.5px;color:#93a1b0}
+.rev-empty{font-size:11.5px;color:#a7b2be;padding:6px 1px}
+.rev-set-h{font-size:11.5px;color:#2f6fb5;font-weight:600;margin:10px 0 2px}
+.rev-set-row{display:flex;align-items:center;gap:10px;padding:5px 0;
+border-bottom:1px dotted #eef1f4;font-size:12.5px}
+.rev-set-row span{flex:1;min-width:0;color:#51606f}
 /* 复查分组 */
 .vg{padding:11px 0;border-bottom:1px solid var(--line)}
 .vg:last-child{border-bottom:none;padding-bottom:0}
@@ -393,25 +445,18 @@ border-radius:50%;animation:spin .85s linear infinite}
 
 <!-- ============ 复查 ============ -->
 <section class="page" id="p-visit">
+  <div class="card rev-hero" id="revHero"></div>
   <div class="card">
-    <h2><span class="t"><span class="bar"></span>重点跟踪</span><span class="muted">近三次异常 · 超期 3 倍 · 异常且超期标红</span></h2>
-    <div id="checkFocus"></div>
+    <h2><span class="t"><span class="bar"></span>本次重点</span><span class="muted">按紧急程度排序 · 最多 5 项</span></h2>
+    <div id="revFocus"></div>
   </div>
   <div class="card">
-    <h2><span class="t"><span class="bar"></span>其他分类</span><span id="revOtherBtn"></span></h2>
-    <div id="checkGroups"></div>
+    <h2><span class="t"><span class="bar"></span>完整检查清单</span><span id="revListBtn"></span></h2>
+    <div id="revList"></div>
   </div>
   <div class="card">
-    <h2><span class="t"><span class="bar"></span>单项待补提醒</span></h2>
-    <div id="singleStale"></div>
-  </div>
-  <div class="card">
-    <h2><span class="t"><span class="bar"></span>按医嘱检查（非化验）</span></h2>
-    <div id="checkManual"></div>
-  </div>
-  <div class="card">
-    <h2><span class="t"><span class="bar"></span>就诊前要问医生的问题</span></h2>
-    <div id="qList"></div>
+    <h2><span class="t"><span class="bar"></span>复查周期设置</span><span id="revSetBtn"></span></h2>
+    <div id="revSettings"></div>
   </div>
 </section>
 
@@ -542,17 +587,6 @@ const KEY_GROUP={egfr:'renal',crea:'renal',urea:'renal',ua:'renal',cysc:'renal',
  alb:'liver',hgb:'blood',tc:'lipid',tg:'lipid',ldl:'lipid',upro:'u24'};
 // 组内周期短于整组的指标：单独按自己的周期提醒
 const KEY_DAYS={k:30,ua:60,upro:45,pth:90};
-
-const QUESTIONS=[
- '我的尿蛋白目标是多少？现在2.3g是否需要加强治疗？',
- '能否考虑加用非奈利酮？我的eGFR 23、血钾5.03是否适合？',
- '血钾持续上升到5.03，需要加降钾药或调整培哚普利/达格列净吗？',
- '我的原发病诊断明确吗？是否需要肾活检？',
- 'PTH 119偏高，是否需要活性维生素D或降磷治疗？',
- '目前是否已到需要准备透析通路的阶段？预计时间窗？',
-];
-
-
 
 const KNOW=[
  {t:'CKD 分期怎么看',c:'按 eGFR：1期≥90，2期60-89，3a期45-59，3b期30-44，4期15-29，5期&lt;15。你现在是4期（eGFR约24），重点目标是延缓进入5期。'},
@@ -3454,7 +3488,7 @@ function groupInfo(g,ctx){
     if(l.date>lastDate) lastDate=l.date;
     const days=daysBetween(l.date,today());
     const max=KEY_DAYS[k]||gd;
-    return {k,n:metaOf(k).n,last:l.date,days,max,bad:c.bad.has(k),stale:max>0&&days>max};
+    return {k,n:metaOf(k).n,u:metaOf(k).u||'',v:l.v,last:l.date,days,max,bad:c.bad.has(k),stale:max>0&&days>max};
   }).filter(Boolean).sort((a,b)=>
     (b.bad-a.bad)||(b.stale-a.stale)||(b.days-a.days)||a.n.localeCompare(b.n,'zh'));
   const days=lastDate?daysBetween(lastDate,today()):null;
@@ -3463,79 +3497,161 @@ function groupInfo(g,ctx){
   const abn=items.filter(it=>it.bad);
   return {g,gdays:gd,items,total:keys.length,lastDate,days,st,abn,urgent:abn.length>0||st==='over3'};
 }
-function visitBadge(st,days,abn){
-  if(st==='none') return '<span class="badge">待记录</span>';
-  if(st==='over3'){
-    // 只有「这一大类里近三次有异常」才用红色，单纯超期用琥珀色
-    return abn
-      ? '<span class="badge" style="background:#fdeaea;color:#b32222;font-weight:700">超期 3 倍</span>'
-      : '<span class="badge" style="background:#fdf3e3;color:#a06a12;font-weight:700">超期 3 倍</span>';
-  }
-  if(st==='over') return `<span class="badge" style="background:#fdf3e3;color:#a06a12">已逾期 ${days} 天</span>`;
-  if(st==='near') return '<span class="badge" style="background:#fdf8ee;color:#c8933f">临近</span>';
-  return '<span class="badge" style="background:#eff7f2;color:#1a9e63">正常</span>';
+/* 复查页 v1.11：行动卡 + 紧急度排序 + 折叠的完整清单/周期设置。
+   判断全部落在“单项”上：上次日期 + 自己的建议周期；大类只用于归类。 */
+const CKD4_CORE=new Set(['egfr','crea','urea','cysc','upro','acr','malb','k','hco3','hgb','ca','p','pth']);
+const REV_CATS=[
+  {n:'肾功能与电解质',ids:['renal'],extra:['k','hco3','x_血钠','血钠','x_氯','x_镁']},
+  {n:'尿液与蛋白',ids:['urine','u24']},
+  {n:'血常规',ids:['blood']},
+  {n:'骨代谢',ids:['bone'],only:['ca','p','pth']},
+  {n:'血脂与糖代谢',ids:['glu','lipid']},
+  {n:'其他（肝功能、心肌酶、免疫、凝血）',ids:['liver','enzyme','imm','coag','other']}
+];
+let revListOpen=false, revSetOpen=false;
+function toggleRevList(){ revListOpen=!revListOpen; renderVisit(); }
+function toggleRevSet(){ revSetOpen=!revSetOpen; renderVisit(); }
+function revDueDate(last,days){
+  const d=new Date(last+'T00:00:00'); d.setDate(d.getDate()+days);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
-let revOtherOpen=false;
-function toggleRevOther(){ revOtherOpen=!revOtherOpen; renderVisit(); }
-function revGroupHtml(s,expanded,issuesOnly){
-  const g=s.g;
-  const abnTag=s.abn.length?`<span class="vg-abn">近三次异常 ${s.abn.length}</span>`:'';
-  // 重点跟踪的大类只展开有问题的单项，正常项收成一行，避免整页变成指标墙
-  let items=s.items, restN=0;
-  if(issuesOnly){
-    items=s.items.filter(it=>it.bad||(it.max>0&&it.days>it.max*3)||(KEY_DAYS[it.k]&&it.stale));
-    restN=s.items.length-items.length;
-  }
-  const chips=items.map(it=>{
-    const red=it.bad&&it.stale;
-    return `<span class="vg-key${red?' bad':''}"><b>${esc(it.n)}</b> ${dateStr(it.last)} · ${it.days}天${red?' · 异常':''}</span>`;
-  }).join('');
-  return `<div class="vg">
-    <div class="vg-hd"><b class="nm">${esc(g.n)}${abnTag}</b>${reviewSelect(g.id,g.days)}${visitBadge(s.st,s.days,s.abn.length)}</div>
-    ${expanded?`<div class="vg-keys">${chips||'<span class="vg-none">尚无可用的检查记录</span>'}</div>
-      <div class="vg-cnt">已记录 ${s.items.length}/${s.total} 项${restN?` · 其余 ${restN} 项在建议周期内`:''}</div>`:''}
+function revCnDate(d){ const p=d.split('-'); return `${+p[1]}月${+p[2]}日`; }
+/* 单项状态：红=异常且超期；琥珀=超期（含 3 倍）；黄=临近；灰=正常/未查 */
+function revStatus(it){
+  if(!it.last) return {cls:'none',txt:'未查',overdue:0,over3:false};
+  const overdue=it.max>0&&it.days!=null&&it.days>it.max?it.days-it.max:0;
+  const over3=it.max>0&&it.days!=null&&it.days>it.max*3;
+  const left=it.max>0&&it.days!=null?it.max-it.days:null;
+  if(it.bad&&overdue>0) return {cls:'red',txt:`超期 ${overdue} 天 · 异常`,overdue,over3};
+  if(over3) return {cls:'amber',txt:`超期 3 倍 · ${overdue} 天`,overdue,over3};
+  if(overdue>0) return {cls:'amber',txt:`超期 ${overdue} 天`,overdue,over3};
+  if(it.bad) return {cls:'warn',txt:left!=null&&left<=30?`异常 · 临近`:'异常',overdue:0,over3:false};
+  if(left!=null&&left<=30) return {cls:'near',txt:'临近',overdue:0,over3};
+  return {cls:'ok',txt:'正常',overdue:0,over3};
+}
+function revRank(it){
+  const s=revStatus(it);
+  if(!it.last) return CKD4_CORE.has(it.k)?4:9;
+  if(s.cls==='red') return 0;
+  if(s.over3) return 1;
+  if(it.bad) return 2;
+  if(s.cls==='amber') return 3;
+  if(s.cls==='near') return 4;
+  return CKD4_CORE.has(it.k)?5:6;
+}
+/* 汇总所有单项（含从未查过的 CKD4 核心项） */
+function revItems(all,ctx){
+  const out=[],seen=new Set();
+  all.forEach((s,i)=>{
+    const g=CHECK_GROUPS[i];
+    s.items.forEach(it=>{
+      if(seen.has(it.k)) return;
+      seen.add(it.k);
+      out.push(Object.assign({},it,{groupId:g.id}));
+    });
+    groupKeys(g).forEach(k=>{
+      if(seen.has(k)||!CKD4_CORE.has(k)) return;
+      seen.add(k);
+      const m=metaOf(k);
+      out.push({k,n:m.n,u:m.u||'',v:null,last:'',days:null,
+        max:KEY_DAYS[k]||s.gdays,bad:ctx.bad.has(k),stale:false,missing:true,groupId:g.id});
+    });
+  });
+  return out;
+}
+function revFocusItems(items){
+  const sorted=items.slice().sort((a,b)=>
+    revRank(a)-revRank(b)||revStatus(b).overdue-revStatus(a).overdue||a.n.localeCompare(b.n,'zh'));
+  const urgent=sorted.filter(it=>revRank(it)<=4);
+  const core=sorted.filter(it=>CKD4_CORE.has(it.k)&&!urgent.includes(it));
+  return urgent.concat(core).slice(0,5);
+}
+function revFocusRow(it,i){
+  const s=revStatus(it);
+  const extra=(s.cls==='ok'&&it.max>0)?` · 剩 ${it.max-it.days} 天`:'';
+  return `<div class="rev-fr${s.cls==='red'?' bad':''}">
+    <div class="rev-fn"><b>${i+1}. ${esc(it.n)}</b><span>${revLabel(it.max)}</span></div>
+    <div class="rev-fv"><b>${it.last?esc(fmt(it.v)):'—'}</b><span>${it.last?dateStr(it.last)+(it.u?' · '+esc(it.u):''):'未查'}</span></div>
+    <div class="rev-fs ${s.cls}">${s.txt}${extra}</div>
   </div>`;
+}
+function renderRevHero(items,focus){
+  const el=document.getElementById('revHero'); if(!el) return;
+  const core=items.filter(it=>CKD4_CORE.has(it.k)&&it.last&&it.max>0);
+  const due=core.map(it=>revDueDate(it.last,it.max)).sort()[0]||'';
+  const left=due?daysBetween(today(),due):null;
+  const reds=items.filter(it=>revStatus(it).cls==='red');
+  const ambers=items.filter(it=>{ const s=revStatus(it); return s.over3&&s.cls!=='red'; });
+  const names=arr=>arr.slice(0,3).map(x=>x.n).join('、')+(arr.length>3?' 等':'');
+  const when=due?`建议 ${revCnDate(due)} 前去复查`:'建议尽快安排核心检查';
+  const sub=due?(left>0?`还有 ${left} 天`:`已超期 ${-left} 天`):'尚无核心项目记录';
+  let warn='<div class="rev-hero-warn ok">核心项目均在建议周期内</div>';
+  if(reds.length) warn=`<div class="rev-hero-warn red">⚠ ${names(reds)} 异常且已超期</div>`;
+  else if(ambers.length) warn=`<div class="rev-hero-warn">⚠ ${names(ambers)} 已超期 3 倍以上</div>`;
+  el.innerHTML=`<div class="rev-hero-t">${when}</div><div class="rev-hero-d">${sub}</div>
+    <div class="rev-hero-f">本次重点：${focus.map(x=>esc(x.n)).join(' · ')}</div>${warn}`;
+}
+function revCatItems(items,c){
+  return items.filter(it=>{
+    if(c.only) return c.only.includes(it.k);
+    if(c.extra) return c.ids.includes(it.groupId)||c.extra.includes(it.k);
+    return c.ids.includes(it.groupId);
+  });
+}
+function revRow(it){
+  const s=revStatus(it);
+  return `<div class="rev-li${s.cls==='red'?' bad':''}">
+    <span class="rev-n" title="${esc(it.n)}">${esc(it.n)}</span>
+    <span class="rev-d">${it.last?dateStr(it.last):'—'}</span>
+    <span class="rev-v">${it.last?esc(fmt(it.v))+(it.u?` <i>${esc(it.u)}</i>`:''):'—'}</span>
+    <span class="rev-s ${s.cls}">${s.txt}</span>
+  </div>`;
+}
+function renderRevList(items){
+  const btn=document.getElementById('revListBtn'),box=document.getElementById('revList');
+  if(!btn||!box) return;
+  btn.innerHTML=`<button class="mini" onclick="toggleRevList()">${revListOpen?'收起':'展开'}</button>`;
+  if(!revListOpen){
+    const rec=items.filter(it=>it.last).length;
+    box.innerHTML=`<div class="empty">已记录 ${rec} 项 · 展开查看按医学分类的全部项目</div>`;
+    return;
+  }
+  let html='';
+  REV_CATS.forEach(c=>{
+    const arr=revCatItems(items,c).sort((a,b)=>revRank(a)-revRank(b)||a.n.localeCompare(b.n,'zh'));
+    const rec=arr.filter(x=>x.last).length;
+    html+=`<div class="rev-cat"><div class="rev-cat-h"><b>${c.n}</b><span>已记录 ${rec}/${arr.length}</span></div>`;
+    html+=arr.length?arr.map(revRow).join(''):'<div class="rev-empty">暂无相关指标</div>';
+    if(c.ids.includes('other')){
+      html+=CHECK_MANUAL.map(m=>`<div class="rev-li">
+        <span class="rev-n">${esc(m.n)}</span><span class="rev-d">—</span><span class="rev-v">—</span>
+        <span class="rev-s none">按医嘱 · ${revLabel(reviewDays(m.id,m.days))}</span></div>`).join('');
+    }
+    html+='</div>';
+  });
+  box.innerHTML=html;
+}
+function renderRevSettings(){
+  const btn=document.getElementById('revSetBtn'),box=document.getElementById('revSettings');
+  if(!btn||!box) return;
+  btn.innerHTML=`<button class="mini" onclick="toggleRevSet()">${revSetOpen?'收起':'展开'}</button>`;
+  if(!revSetOpen){ box.innerHTML='<div class="empty">需要调整复查间隔时展开</div>'; return; }
+  box.innerHTML=CHECK_GROUPS.map(g=>
+    `<div class="rev-set-row"><span>${esc(g.n)}</span>${reviewSelect(g.id,g.days)}</div>`).join('')
+    +'<div class="rev-set-h">按医嘱检查</div>'
+    +CHECK_MANUAL.map(m=>
+      `<div class="rev-set-row"><span>${esc(m.n)}</span>${reviewSelect(m.id,m.days)}</div>`).join('');
 }
 function renderVisit(){
   const ctx=reviewCtx();
   const all=CHECK_GROUPS.map(g=>groupInfo(g,ctx));
-  const focus=all.filter(s=>s.urgent)
-    .sort((a,b)=>(b.st==='over3')-(a.st==='over3')||b.abn.length-a.abn.length||(b.days||0)-(a.days||0));
-  const rest=all.filter(s=>!s.urgent);
-
-  document.getElementById('checkFocus').innerHTML=focus.length
-    ? focus.map(s=>revGroupHtml(s,true,true)).join('')
-    : '<div class="empty">近三次无异常，也没有超期 3 倍的大类 ✅</div>';
-  document.getElementById('checkGroups').innerHTML=rest.length
-    ? rest.map(s=>revGroupHtml(s,revOtherOpen,false)).join('')
-    : '<div class="empty">全部大类都在重点跟踪中</div>';
-  document.getElementById('revOtherBtn').innerHTML=rest.length
-    ? `<button class="mini" onclick="toggleRevOther()">${revOtherOpen?'收起':'展开'} ${rest.length} 类</button>` : '';
-
-  // 单项提醒只保留真正需要行动的：超过建议周期 3 倍，
-  // 或血钾/尿酸这类短周期关键项已超期；按大类合并成一条，避免刷屏
-  const staleG=[];
-  all.forEach(s=>{
-    if(s.st==='over'||s.st==='over3') return;
-    const arr=s.items.filter(it=>(it.max>0&&it.days>it.max*3)||(KEY_DAYS[it.k]&&it.stale));
-    if(arr.length) staleG.push({g:s.g,items:arr});
-  });
-  staleG.sort((a,b)=>b.items.length-a.items.length);
-  document.getElementById('singleStale').innerHTML=staleG.length
-    ? staleG.map(o=>{
-        const x3=o.items.filter(it=>it.max>0&&it.days>it.max*3);
-        const head=x3.length
-          ? `${o.items.length} 项需补查，其中 ${x3.length} 项已超建议周期 3 倍`
-          : `${o.items.length} 项已超自己的建议周期`;
-        const names=o.items.slice(0,8).map(it=>esc(it.n)).join('、')+(o.items.length>8?' 等':'');
-        return `<div class="rem ${x3.length?'r':'a'}"><span class="ic">⏰</span><div><b>${esc(o.g.n)}</b>：${head}<div class="muted" style="margin-top:2px;line-height:1.5">${names}</div></div></div>`;
-      }).join('')
-    : '<div class="empty">组内各项均在建议周期内 ✅</div>';
-
-  document.getElementById('checkManual').innerHTML=CHECK_MANUAL.map(c=>
-    `<div class="list-item"><div style="flex:1">${esc(c.n)}</div>${reviewSelect(c.id,c.days)}</div>`).join('');
-
-  document.getElementById('qList').innerHTML=QUESTIONS.map(q=>`<div class="list-item"><div class="dt">💬</div><div>${q}</div></div>`).join('');
+  const items=revItems(all,ctx);
+  const focus=revFocusItems(items);
+  renderRevHero(items,focus);
+  const fb=document.getElementById('revFocus');
+  if(fb) fb.innerHTML=focus.length?focus.map(revFocusRow).join(''):'<div class="empty">暂无检查记录</div>';
+  renderRevList(items);
+  renderRevSettings();
 }
 /* ==================== 知识页 ==================== */
 function renderKnow(){
@@ -3656,7 +3772,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.10.3 · 2026-11-01';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.11.0 · 2026-11-03';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
