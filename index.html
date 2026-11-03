@@ -3484,8 +3484,8 @@ function groupInfo(g,ctx){
    判断全部落在“单项”上：上次日期 + 自己的建议周期；大类只用于归类。 */
 const CKD4_CORE=new Set(['egfr','crea','urea','cysc','upro','acr','malb','k','hco3','hgb','ca','p','pth']);
 let revCatOpen={}, revCatAll={}, revSetOpen=false;
-function revCatOpenState(id,hasAbn){ return revCatOpen[id]===undefined?!!hasAbn:!!revCatOpen[id]; }
-function toggleRevCat(id,hasAbn){ revCatOpen[id]=!revCatOpenState(id,hasAbn); renderVisit(); }
+function revCatOpenState(id,hasRed){ return revCatOpen[id]===undefined?!!hasRed:!!revCatOpen[id]; }
+function toggleRevCat(id,hasRed){ revCatOpen[id]=!revCatOpenState(id,hasRed); renderVisit(); }
 function toggleRevCatAll(id){ revCatAll[id]=!revCatAll[id]; renderVisit(); }
 function toggleRevSet(){ revSetOpen=!revSetOpen; renderVisit(); }
 function revDueDate(last,days){
@@ -3568,9 +3568,9 @@ function renderRevList(items,all){
   CHECK_GROUPS.forEach(g=>{
     const arr=items.filter(it=>it.groupId===g.id)
       .sort((a,b)=>revRank(a)-revRank(b)||a.n.localeCompare(b.n,'zh'));
-    const abn=arr.filter(it=>it.bad);
-    const rest=arr.filter(it=>!it.bad);
-    const open=revCatOpenState(g.id,abn.length>0);
+    const red=arr.filter(it=>revStatus(it).cls==='red');
+    const others=arr.filter(it=>revStatus(it).cls!=='red');
+    const open=revCatOpenState(g.id,red.length>0);
     const last=arr.reduce((m,it)=>it.last&&it.last>m?it.last:m,'');
     const gd=info[g.id]?info[g.id].gdays:0;
     const used=last&&gd>0?daysBetween(last,today()):null;
@@ -3580,14 +3580,14 @@ function renderRevList(items,all){
         <b>${esc(g.n)}</b>
         <span class="rev-cat-d">${last||'—'}</span>
         ${od?`<span class="rev-cat-od${used>gd*3?' red':''}">超期 ${od} 天</span>`:''}
-        <button class="mini" onclick="toggleRevCat('${g.id}',${abn.length?1:0})">${open?'收起':'展开'}</button>
+        <button class="mini" onclick="toggleRevCat('${g.id}',${red.length?1:0})">${open?'收起':'展开'}</button>
       </div>`;
     if(open){
-      const showAll=!abn.length||revCatAll[g.id];
-      const list=showAll?arr:abn;
-      html+=list.length?list.map(revRow).join(''):'<div class="rev-empty">暂无检查记录</div>';
-      if(abn.length&&rest.length){
-        html+=`<div class="rev-others"><button class="mini" onclick="toggleRevCatAll('${g.id}')">${revCatAll[g.id]?'收起其他':`其他 ${rest.length} 项`}</button></div>`;
+      const showAll=revCatAll[g.id];
+      const list=showAll?arr:red;
+      html+=list.length?list.map(revRow).join(''):(arr.length?'<div class="rev-empty">暂无标红指标</div>':'<div class="rev-empty">暂无检查记录</div>');
+      if(others.length){
+        html+=`<div class="rev-others"><button class="mini" onclick="toggleRevCatAll('${g.id}')">${showAll?'收起其他':`其他 ${others.length} 项`}</button></div>`;
       }
     }
     html+='</div>';
@@ -3732,7 +3732,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.11.2 · 2026-11-03';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.11.3 · 2026-11-03';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
