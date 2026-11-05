@@ -648,6 +648,7 @@ function load(){ return JSON.parse(JSON.stringify(DEFAULT)); }
 function save(){
   // DB 只是本次会话的内存视图，唯一数据源是云端 facts 表
   if(FACTS_READY) persistFacts();
+  if(cloudUser) flushCloud();   // 立即上传，不等 1.2 秒防抖；失败会留在待传队列
 }
 let DB=load();
 
@@ -4607,7 +4608,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.16.4 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.16.5 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
