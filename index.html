@@ -3783,9 +3783,10 @@ function dailyOf(){
   return DB.daily;
 }
 function pruneDaily(x,days){
-  const d=new Date(); d.setDate(d.getDate()-days);
+  // 血压/体重/饮水保留全部历史（最多各 500 条），避免补录较早日期时被静默删除
+  ['bp','wt','water'].forEach(k=>{ x[k]=x[k].slice(-500); });
+  const d=new Date(); d.setDate(d.getDate()-(days||180));
   const cut=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-  ['bp','wt','water'].forEach(k=>{ x[k]=x[k].filter(e=>e.d>=cut).slice(-500); });
   Object.keys(x.sym||{}).forEach(k=>{ if(k<cut) delete x.sym[k]; });
 }
 function saveDaily(){
@@ -4583,7 +4584,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.16.2 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.16.3 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
