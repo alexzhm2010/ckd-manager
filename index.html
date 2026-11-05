@@ -91,6 +91,16 @@ font-size:11.5px;font-family:inherit;color:#5b6b7a;cursor:pointer;transition:.12
 .sym-btn.on.lv1{background:#e7a23a;border-color:#e7a23a}
 .sym-btn.on.lv2{background:#e08b0a;border-color:#e08b0a}
 .sym-btn.on.lv3{background:var(--red);border-color:var(--red)}
+/* ==== 用药观察 ==== */
+.mp-row{padding:9px 0;border-bottom:1px dotted #eceff3}
+.mp-row:last-child{border-bottom:none;padding-bottom:0}
+.mp-hd{display:flex;align-items:center;gap:8px}
+.mp-n{font-size:13px;font-weight:600;flex:1;min-width:0;line-height:1.4}
+.mp-date{width:136px;flex:0 0 136px;padding:6px 8px;font-size:12px}
+.mp-w{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.mp-btn{border:1px solid #dbe3ea;background:#fff;border-radius:9px;padding:4px 9px;
+font-size:11.5px;font-family:inherit;color:#5b6b7a;cursor:pointer;transition:.12s}
+.mp-btn.on{background:var(--pri2);border-color:var(--pri2);color:#fff;font-weight:600}
 /* ==== 表单 ==== */
 .row{display:flex;gap:10px;margin-bottom:10px}
 .field{flex:1;min-width:0}
@@ -474,6 +484,15 @@ border-radius:50%;animation:spin .85s linear infinite}
     </div>
     <div class="muted" id="symSum" style="margin-top:8px;line-height:1.7"></div>
   </div>
+  <div class="card" id="medCard">
+    <h2><span class="t"><span class="bar"></span>用药观察</span><span class="muted" id="medHint"></span></h2>
+    <div class="muted" style="font-size:11.5px;margin-bottom:9px;line-height:1.65">
+      填用药开始日期，并勾选要观察的指标。系统只呈现用药前后数值变化，不做因果判断，也不调整剂量。
+    </div>
+    <div id="medRows"></div>
+    <button class="btn" style="margin-top:10px" onclick="saveMedPlan()">保存用药观察设置</button>
+    <div class="muted" id="medSum" style="margin-top:8px;line-height:1.7"></div>
+  </div>
   <div class="card">
     <h2><span class="t"><span class="bar"></span>化验报告（全部项目）</span><span class="muted" id="rptCount"></span></h2>
     <div class="muted" style="font-size:11.5px;margin-bottom:9px;line-height:1.65">
@@ -622,7 +641,7 @@ const KEY='kidney_mgr_v1';
 let FACTS_READY=false;      // 等下面的表结构和 META 都就绪后，save 才写 facts
 const DEFAULT={
   logs:[], meds:{}, visits:[], labs:{}, syms:{}, abn:{}, rpt:{}, metrics:{}, review:{},
-  profile:{}, aiAdvice:{}, daily:{bp:[],wt:[],water:[]}
+  profile:{}, aiAdvice:{}, daily:{bp:[],wt:[],water:[]}, medPlan:{}
 };
 /* 数据只存云端：启动时从 facts 表拉取，浏览器里不保留任何数据 */
 function load(){ return JSON.parse(JSON.stringify(DEFAULT)); }
@@ -766,7 +785,7 @@ function deriveFacts(db,touch){
   };
 
   [['logs',db.logs||[]],['meds',db.meds||{}],['visits',db.visits||[]],['syms',db.syms||{}],
-   ['metrics',db.metrics||{}],['review',db.review||{}],['profile',db.profile||{}],['aiAdvice',db.aiAdvice||{}],
+   ['metrics',db.metrics||{}],['review',db.review||{}],['profile',db.profile||{}],['aiAdvice',db.aiAdvice||{}],['medPlan',db.medPlan||{}],
    ['daily',db.daily||{}]].forEach(([k,v])=>{
     const uid='block|'+k;
     const prev=FACTMAP.get(uid);
@@ -3927,8 +3946,100 @@ function renderSymSum(){
   box.textContent=`近 14 天记录 ${s.count14} 次`+(bits?`；出现：${bits}`:'；未报告明显症状')
     +(s.note?`；最近备注：${s.note}`:'')+'。';
 }
+/* ==================== 用药观察 ==================== */
+const MED_WATCH=[
+ {k:'bp',n:'血压'},{k:'upro',n:'尿蛋白'},{k:'egfr',n:'eGFR'},{k:'k',n:'血钾'},
+ {k:'ua',n:'尿酸'},{k:'hgb',n:'血红蛋白'},{k:'ldl',n:'LDL'}
+];
+const MED_PLAN_DEF={m1:['bp','upro','k'],m2:['egfr','upro','bp'],m3:['ua'],m4:['ldl']};
+let medDraft=null;
+function medPlanOf(){
+  if(!DB.medPlan||typeof DB.medPlan!=='object'||Array.isArray(DB.medPlan)) DB.medPlan={};
+  return DB.medPlan;
+}
+function renderMedPlan(){
+  const box=document.getElementById('medRows'); if(!box) return;
+  const plan=medPlanOf(); medDraft={};
+  MEDS.forEach(m=>{
+    const p=plan[m.k]||{};
+    medDraft[m.k]={start:p.start||'',watch:Array.isArray(p.watch)?p.watch.slice():(MED_PLAN_DEF[m.k]||[]).slice()};
+  });
+  const hint=document.getElementById('medHint');
+  if(hint) hint.textContent=Object.keys(plan).length?Object.keys(plan).length+' 种已设置':'未设置';
+  drawMedRows(); renderMedResp();
+}
+function drawMedRows(){
+  const box=document.getElementById('medRows'); if(!box||!medDraft) return;
+  box.innerHTML=MEDS.map(m=>{
+    const d=medDraft[m.k];
+    return `<div class="mp-row"><div class="mp-hd"><div class="mp-n">${esc(m.n)}</div>
+      <input type="date" class="mp-date" value="${d.start}" max="${today()}" onchange="setMedStart('${m.k}',this.value)"></div>
+      <div class="mp-w">${MED_WATCH.map(w=>`<button class="mp-btn${d.watch.indexOf(w.k)>=0?' on':''}" onclick="toggleMedWatch('${m.k}','${w.k}')">${esc(w.n)}</button>`).join('')}</div></div>`;
+  }).join('');
+}
+function setMedStart(k,v){ if(!medDraft[k]) return; medDraft[k].start=v; }
+function toggleMedWatch(k,key){
+  const d=medDraft[k]; if(!d) return;
+  const i=d.watch.indexOf(key);
+  if(i>=0) d.watch.splice(i,1); else d.watch.push(key);
+  drawMedRows();
+}
+function saveMedPlan(){
+  const plan={}; let bad=false;
+  MEDS.forEach(m=>{
+    const d=medDraft&&medDraft[m.k]; if(!d||!d.start) return;
+    if(d.start>today()){ bad=true; return; }
+    plan[m.k]={start:d.start,watch:d.watch.slice()};
+  });
+  if(bad) return toast('用药开始日期不能晚于今天');
+  DB.medPlan=plan; save(); renderMedPlan(); renderHome(); renderVisit();
+  toast(plan&&Object.keys(plan).length?'用药观察设置已保存':'已清空用药观察设置');
+}
+function medResponse(){
+  const plan=medPlanOf(), t=today(), out=[];
+  MEDS.forEach(m=>{
+    const p=plan[m.k]; if(!p||!p.start) return;
+    const start=p.start, watch=Array.isArray(p.watch)?p.watch:[], items=[];
+    watch.forEach(k=>{
+      if(k==='bp'){
+        const bp=(dailyOf().bp||[]).filter(e=>e&&e.d&&isFinite(Number(e.sbp))&&isFinite(Number(e.dbp)));
+        const pre=bp.filter(e=>e.d<start&&daysBetween(e.d,start)<=90);
+        const post=bp.filter(e=>e.d>=start);
+        if(pre.length&&post.length){
+          items.push({key:'bp',name:'血压',
+            before:Math.round(pre.reduce((s,e)=>s+Number(e.sbp),0)/pre.length)+'/'+Math.round(pre.reduce((s,e)=>s+Number(e.dbp),0)/pre.length),
+            after:Math.round(post.reduce((s,e)=>s+Number(e.sbp),0)/post.length)+'/'+Math.round(post.reduce((s,e)=>s+Number(e.dbp),0)/post.length),
+            countBefore:pre.length,countAfter:post.length});
+        }else items.push({key:'bp',name:'血压',insufficient:true});
+        return;
+      }
+      const s=seriesOf(k), meta=metaOf(k);
+      if(!s.length){ items.push({key:k,name:meta.n,unit:meta.u,insufficient:true}); return; }
+      const pre=s.filter(x=>x.date<start&&daysBetween(x.date,start)<=90).slice(-1)[0];
+      const post=s.filter(x=>x.date>=start).slice(-1)[0];
+      if(!pre||!post){ items.push({key:k,name:meta.n,unit:meta.u,insufficient:true}); return; }
+      items.push({key:k,name:meta.n,unit:meta.u,before:pre.v,after:post.v,
+        delta:Number((Number(post.v)-Number(pre.v)).toFixed(2)),beforeDate:pre.date,afterDate:post.date});
+    });
+    out.push({name:m.n,start:start,days:daysBetween(start,t),watch:items});
+  });
+  return out;
+}
+function renderMedResp(){
+  const box=document.getElementById('medSum'); if(!box) return;
+  const rows=medResponse();
+  if(!rows.length){ box.textContent='还没有设置用药开始日期。设置后可查看用药前后指标变化。'; return; }
+  box.innerHTML=rows.map(r=>{
+    const parts=r.watch.map(w=>{
+      if(w.insufficient) return `${w.name} 数据不足`;
+      if(w.key==='bp') return `血压 ${w.before}→${w.after}`;
+      return `${w.name} ${w.before}→${w.after}${w.unit?' '+w.unit:''}`;
+    }).join('，');
+    return `<div><b>${esc(r.name)}</b>（用药 ${r.days} 天）：${esc(parts||'未选择观察指标')}</div>`;
+  }).join('');
+}
 /* ==================== 健康档案 + AI 解读 ==================== */
-const AI_PROMPT_VERSION='CKD_ADVISOR_V3';
+const AI_PROMPT_VERSION='CKD_ADVISOR_V4';
 const AI_CONSENT_VERSION='2026-11';
 let profOpen=false, aiOpen=false, aiLoading=false, aiError='', aiContext=null;
 const PROF_CB=[
@@ -4160,7 +4271,7 @@ async function buildAiContext(){
     profile:{age:ageOf(p)?Number(ageOf(p)):null,sex:p.sex||null,ckdStage:p.ckdStage||null,
       primaryCause:p.primaryCause||null,dryWeight:p.dryWeight||null,
       comorbidities:p.comorbidities||[],allergies:p.allergies||''},
-    labs,trends,meds,symptoms:symptomSummary(),daily,
+    labs,trends,meds,symptoms:symptomSummary(),daily,medResponses:medResponse(),
     review,redFlags,
     dataSummary:{recordedKeys:keys.length,latestLabDate:labs.length?labs.map(x=>x.date).sort().pop():'',
       lastReportDate:Object.keys(DB.rpt||{}).sort().pop()||'',
@@ -4368,7 +4479,7 @@ function go(p,el){
   if(ib) ib.style.display=(p==='chart'||!ib.classList.contains('fixed'))?'':'none';
   if(p==='chart'){ initTrendSel(); renderSeg(); drawChart(); renderGoals(); setTimeout(()=>chart&&chart.resize(),50); }
   if(p==='visit') renderVisit(); else setDefaultHeader();
-  if(p==='log'){ renderRpt(); renderDaily(); renderSym(); }
+  if(p==='log'){ renderRpt(); renderDaily(); renderSym(); renderMedPlan(); }
 }
 
 /* ==================== 登录 ==================== */
@@ -4465,7 +4576,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.15.0 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.16.0 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
@@ -4474,7 +4585,7 @@ async function initApp(){
   // 指标字典就绪后再填手动补录的下拉（按化验类型/归类/标准名分组）
   document.getElementById('labKey').innerHTML=metricOptions('crea');
   // 图表库可能还在下载（首次约 1MB），先渲染不依赖图表的页面，避免整页空白
-  renderRpt(); renderDaily(); renderSym(); renderKnow(); initImport(); renderGoals();
+  renderRpt(); renderDaily(); renderSym(); renderMedPlan(); renderKnow(); initImport(); renderGoals();
   if(window.__echartsReady) await window.__echartsReady;
   renderHome();
   setDefaultHeader();
