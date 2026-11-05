@@ -916,7 +916,9 @@ function applyFacts(rows){
     }else if(r.kind==='rptmeta'&&r.date){
       metaBox[r.date]=r.meta&&r.meta.info?r.meta.info:{};
     }else if(r.kind==='block'&&r.key){
-      db[r.key]=r.meta&&r.meta.data!==undefined?r.meta.data:
+      // 深拷贝：DB 里的块必须与 FACTS 行里的对象脱钩，
+      // 否则改 DB 会同步改到待比对的原对象，deriveFacts 永远判成“没变化”
+      db[r.key]=r.meta&&r.meta.data!==undefined?JSON.parse(JSON.stringify(r.meta.data)):
         ((r.key==='logs'||r.key==='visits')?[]:{});
     }
   });
@@ -4608,7 +4610,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.16.5 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.16.6 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
