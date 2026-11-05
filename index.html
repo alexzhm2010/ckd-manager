@@ -325,6 +325,9 @@ background:#fdeaea;color:#b32222;font-weight:600}
 .ai-dis{font-size:10.5px;color:#9aa6b2;line-height:1.65;margin-top:10px;padding-top:9px;
 border-top:1px solid #edf1f5}
 .ai-ops{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.ai-gap{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px dashed #eceff3}
+.ai-gap:last-child{border-bottom:none}
+.ai-gap .g{flex:1;min-width:0;font-size:12.5px;line-height:1.65;color:#5b6b7a}
 .ai-consent{display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.65;
 color:#3d4b59;margin:10px 0}
 .ai-consent input{width:auto;height:auto;margin-top:2px}
@@ -419,6 +422,29 @@ border-radius:50%;animation:spin .85s linear infinite}
 
 <!-- ============ 记录（含逐项维护） ============ -->
 <section class="page" id="p-log">
+  <div class="card">
+    <h2><span class="t"><span class="bar"></span>日常记录</span><span class="muted" id="dlHint"></span></h2>
+    <div class="muted" style="font-size:11.5px;margin-bottom:9px;line-height:1.65">
+      记录血压、体重与饮水，用于容量负荷和降压效果判断。只填有数据的项，按日期保存，同一天重复保存会覆盖当天该项。
+    </div>
+    <div class="row">
+      <div class="field"><label>日期</label><input type="date" id="dlDate"></div>
+      <div class="field"><label>收缩压 mmHg</label><input type="number" id="dlSbp" inputmode="numeric" min="60" max="260"></div>
+      <div class="field"><label>舒张压 mmHg</label><input type="number" id="dlDbp" inputmode="numeric" min="30" max="160"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>心率（可选）</label><input type="number" id="dlHr" inputmode="numeric" min="30" max="200"></div>
+      <div class="field"><label>体重 kg</label><input type="number" id="dlKg" step="0.1" inputmode="decimal" min="20" max="250"></div>
+      <div class="field"><label>水肿</label><select id="dlEdema">
+        <option value="">未记录</option><option value="0">无</option><option value="1">轻度</option><option value="2">明显</option>
+      </select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>饮水 ml</label><input type="number" id="dlMl" inputmode="numeric" min="0" max="6000" step="50"></div>
+      <div class="field" style="flex:0 0 auto;display:flex;align-items:end"><button class="btn" onclick="saveDaily()">保存</button></div>
+    </div>
+    <div class="muted" id="dlSum" style="margin-top:8px;line-height:1.7"></div>
+  </div>
   <div class="card">
     <h2><span class="t"><span class="bar"></span>化验报告（全部项目）</span><span class="muted" id="rptCount"></span></h2>
     <div class="muted" style="font-size:11.5px;margin-bottom:9px;line-height:1.65">
@@ -567,7 +593,7 @@ const KEY='kidney_mgr_v1';
 let FACTS_READY=false;      // 等下面的表结构和 META 都就绪后，save 才写 facts
 const DEFAULT={
   logs:[], meds:{}, visits:[], labs:{}, syms:{}, abn:{}, rpt:{}, metrics:{}, review:{},
-  profile:{}, aiAdvice:{}
+  profile:{}, aiAdvice:{}, daily:{bp:[],wt:[],water:[]}
 };
 /* 数据只存云端：启动时从 facts 表拉取，浏览器里不保留任何数据 */
 function load(){ return JSON.parse(JSON.stringify(DEFAULT)); }
@@ -706,7 +732,8 @@ function deriveFacts(db,touch){
   };
 
   [['logs',db.logs||[]],['meds',db.meds||{}],['visits',db.visits||[]],['syms',db.syms||{}],
-   ['metrics',db.metrics||{}],['review',db.review||{}],['profile',db.profile||{}],['aiAdvice',db.aiAdvice||{}]].forEach(([k,v])=>{
+   ['metrics',db.metrics||{}],['review',db.review||{}],['profile',db.profile||{}],['aiAdvice',db.aiAdvice||{}],
+   ['daily',db.daily||{}]].forEach(([k,v])=>{
     const uid='block|'+k;
     const prev=FACTMAP.get(uid);
     const changed=!prev||JSON.stringify((prev.meta||{}).data)!==JSON.stringify(v);
@@ -3693,8 +3720,92 @@ function renderVisit(){
   const pg=document.getElementById('p-visit');
   if(pg&&pg.classList.contains('on')) renderVisitHeader(items,all);
 }
+/* ==================== 日常记录（血压 / 体重 / 饮水） ==================== */
+function dailyOf(){
+  if(!DB.daily||typeof DB.daily!=='object') DB.daily={bp:[],wt:[],water:[]};
+  ['bp','wt','water'].forEach(k=>{ if(!Array.isArray(DB.daily[k])) DB.daily[k]=[]; });
+  return DB.daily;
+}
+function pruneDaily(x,days){
+  const d=new Date(); d.setDate(d.getDate()-days);
+  const cut=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  ['bp','wt','water'].forEach(k=>{ x[k]=x[k].filter(e=>e.d>=cut).slice(-500); });
+}
+function saveDaily(){
+  const d=(document.getElementById('dlDate').value||today());
+  if(d>today()) return toast('日期不能晚于今天');
+  const num=id=>{ const v=(document.getElementById(id).value||'').trim(); if(v==='') return null; const n=Number(v); return isFinite(n)?n:null; };
+  const sbp=num('dlSbp'), dbp=num('dlDbp'), hr=num('dlHr'), kg=num('dlKg'), ml=num('dlMl');
+  const ed=(document.getElementById('dlEdema').value||'');
+  if(sbp==null&&dbp==null&&kg==null&&ml==null) return toast('至少填写一项');
+  if((sbp==null)!==(dbp==null)) return toast('血压请同时填写收缩压和舒张压');
+  if(sbp!=null&&(sbp<60||sbp>260||dbp<30||dbp>160)) return toast('血压数值超出合理范围');
+  if(sbp!=null&&sbp<=dbp) return toast('收缩压应高于舒张压');
+  if(kg!=null&&(kg<20||kg>250)) return toast('体重超出合理范围');
+  if(ml!=null&&(ml<0||ml>6000)) return toast('饮水量超出合理范围');
+  const x=dailyOf();
+  if(sbp!=null){
+    x.bp=x.bp.filter(e=>e.d!==d);
+    x.bp.push({d,t:new Date().toTimeString().slice(0,5),sbp,dbp,hr});
+  }
+  if(kg!=null){
+    x.wt=x.wt.filter(e=>e.d!==d);
+    x.wt.push({d,kg,edema:ed===''?null:Number(ed)});
+  }
+  if(ml!=null){
+    x.water=x.water.filter(e=>e.d!==d);
+    x.water.push({d,ml});
+  }
+  pruneDaily(x,180);
+  save();
+  ['dlSbp','dlDbp','dlHr','dlKg','dlMl'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+  const edEl=document.getElementById('dlEdema'); if(edEl) edEl.value='';
+  renderDaily(); renderHome(); renderVisit();
+  toast('日常记录已保存');
+}
+function dailySummary(){
+  const x=dailyOf(), t=today();
+  const recent=(arr,days)=>arr.filter(e=>e.d&&daysBetween(e.d,t)<=days);
+  const bp7=recent(x.bp,7), bp30=recent(x.bp,30), wt7=recent(x.wt,7), w7=recent(x.water,7);
+  const avg=(arr,f)=>arr.length?arr.reduce((s,e)=>s+Number(e[f]||0),0)/arr.length:null;
+  const p=profileOf();
+  const tSbp=Number(p.targetSbp)||130, tDbp=Number(p.targetDbp)||80;
+  const ok=bp7.filter(e=>e.sbp<=tSbp&&e.dbp<=tDbp).length;
+  const wtLatest=wt7.length?wt7[wt7.length-1]:null;
+  const dry=Number(p.dryWeight)||null;
+  const wt3=wt7.filter(e=>daysBetween(e.d,t)<=3);
+  const wtDelta3=wt3.length>=2?Number(wt3[wt3.length-1].kg)-Number(wt3[0].kg):null;
+  const edema=wt7.filter(e=>e.edema!=null&&e.edema>0).pop()||null;
+  return {
+    bp7:bp7.length?{count:bp7.length,avgSbp:Math.round(avg(bp7,'sbp')),avgDbp:Math.round(avg(bp7,'dbp')),
+      maxSbp:Math.max(...bp7.map(e=>e.sbp)),control:ok,target:tSbp+'/'+tDbp}:null,
+    bp30:bp30.length?{count:bp30.length,avgSbp:Math.round(avg(bp30,'sbp')),avgDbp:Math.round(avg(bp30,'dbp'))}:null,
+    weight:wtLatest?{latest:Number(wtLatest.kg),date:wtLatest.d,dryWeight:dry,
+      deltaDry:dry?Number((Number(wtLatest.kg)-dry).toFixed(1)):null,
+      delta3d:wtDelta3==null?null:Number(wtDelta3.toFixed(1)),edema:edema?edema.edema:0}:null,
+    water7:w7.length?Math.round(w7.reduce((s,e)=>s+Number(e.ml||0),0)/w7.length):null
+  };
+}
+function renderDaily(){
+  const el=document.getElementById('dlDate'); if(el&&!el.value) el.value=today();
+  const x=dailyOf();
+  const has=x.bp.some(e=>e.d===today())||x.wt.some(e=>e.d===today())||x.water.some(e=>e.d===today());
+  const hint=document.getElementById('dlHint'); if(hint) hint.textContent=has?'今天已记录':'今天未记录';
+  const s=dailySummary(), out=[];
+  if(s.bp7) out.push(`近 7 天血压 ${s.bp7.avgSbp}/${s.bp7.avgDbp} mmHg，达标 ${s.bp7.control}/${s.bp7.count}（目标 ${s.bp7.target}）`);
+  if(s.weight){
+    let w=`体重 ${s.weight.latest} kg`;
+    if(s.weight.deltaDry!=null) w+=`，较干体重 ${s.weight.deltaDry>0?'+':''}${s.weight.deltaDry} kg`;
+    if(s.weight.delta3d!=null&&s.weight.delta3d!==0) w+=`，近 3 天 ${s.weight.delta3d>0?'+':''}${s.weight.delta3d} kg`;
+    if(s.weight.edema===2) w+='，有明显水肿';
+    out.push(w);
+  }
+  if(s.water7!=null) out.push(`近 7 天平均饮水 ${s.water7} ml/天`);
+  const box=document.getElementById('dlSum');
+  if(box) box.innerHTML=out.length?out.map(esc).join('；')+'。':'还没有记录，填一项即可保存。';
+}
 /* ==================== 健康档案 + AI 解读 ==================== */
-const AI_PROMPT_VERSION='CKD_ADVISOR_V1';
+const AI_PROMPT_VERSION='CKD_ADVISOR_V2';
 const AI_CONSENT_VERSION='2026-11';
 let profOpen=false, aiOpen=false, aiLoading=false, aiError='', aiContext=null;
 const PROF_CB=[
@@ -3854,6 +3965,7 @@ function renderAiSheet(){
   if(!hasAiConsent()){
     box.innerHTML=`<div class="ai-note">AI 解读会把去标识化后的指标、用药和复查数据发送给第三方模型（通义千问），
       用于生成参考建议。不会发送姓名、医院或原始报告文字。结果不构成医疗建议，也不能替代肾内科医生。</div>
+      ${aiGapsHtml()}
       <label class="ai-consent"><input type="checkbox" id="aiConsentChk" onchange="toggleAiConsentBtn()">
         我已阅读并同意将上述数据用于 AI 健康解读</label>
       <button class="btn" id="aiConsentGo" disabled onclick="acceptAiConsent()">同意并继续</button>
@@ -3882,8 +3994,9 @@ function renderAiSheet(){
   }
   const latest=aiContext.data&&aiContext.data.dataSummary?aiContext.data.dataSummary.latestLabDate:'';
   box.innerHTML=`${profileWarnHtml()}
-    <div class="ai-note">将发送：${aiContext.data.labs.length} 条近期化验值、用药与复查状态。
+    <div class="ai-note">将发送：${aiContext.data.labs.length} 条近期化验值、近 7 天血压与体重摘要、用药与复查状态。
       最近化验日期：${latest||'—'}。数据已去标识化，不含姓名和医院。</div>
+    ${aiGapsHtml()}
     <div class="ai-ops"><button class="btn" onclick="startAiAdvice()">生成健康解读</button>
       <button class="btn ghost sm" onclick="closeAiSheet()">取消</button></div>
     <div class="ai-dis">结果仅供就医前参考，不构成医疗建议。</div>`;
@@ -3919,14 +4032,18 @@ async function buildAiContext(){
   });
   const review=reviewPlan().map(x=>({name:x.n,cycle:x.cycle,last:x.last,daysSince:x.daysSince,level:x.level,abnormal:x.abnormal}));
   const redFlags=aiLocalRedFlags();
+  const daily=dailySummary();
   const data={
     profile:{age:ageOf(p)?Number(ageOf(p)):null,sex:p.sex||null,ckdStage:p.ckdStage||null,
       primaryCause:p.primaryCause||null,dryWeight:p.dryWeight||null,
       comorbidities:p.comorbidities||[],allergies:p.allergies||''},
-    labs,trends,meds,symptoms:[],
+    labs,trends,meds,symptoms:[],daily,
     review,redFlags,
     dataSummary:{recordedKeys:keys.length,latestLabDate:labs.length?labs.map(x=>x.date).sort().pop():'',
-      lastReportDate:Object.keys(DB.rpt||{}).sort().pop()||''}
+      lastReportDate:Object.keys(DB.rpt||{}).sort().pop()||'',
+      bpDate:(dailyOf().bp||[]).map(e=>e.d).sort().pop()||'',
+      weightDate:daily.weight?daily.weight.date:'',
+      bpCount7d:daily.bp7?daily.bp7.count:0}
   };
   const hash=await sha256Hex(JSON.stringify(data)+'|'+AI_PROMPT_VERSION);
   return {data,hash,promptVersion:AI_PROMPT_VERSION};
@@ -3939,7 +4056,50 @@ function aiLocalRedFlags(){
   if(hco3&&hco3.v<18) out.push(`碳酸氢盐 ${fmt(hco3.v)} mmol/L，明显偏低，提示酸中毒风险，请尽快就医。`);
   if(hgb&&hgb.v<90) out.push(`血红蛋白 ${fmt(hgb.v)} g/L，明显偏低，请尽快评估贫血原因。`);
   if(egfr&&egfr.v<15) out.push(`eGFR ${fmt(egfr.v)}，已低于 15，请尽快与肾内科讨论后续方案。`);
+  const bp=(dailyOf().bp||[]).slice().sort((a,b)=>a.d<b.d?-1:1).pop();
+  if(bp&&daysBetween(bp.d,today())<=7){
+    if(bp.sbp>=180||bp.dbp>=110) out.push(`血压 ${bp.sbp}/${bp.dbp} mmHg，已达到需要立即处理的范围，请尽快联系医生或急诊。`);
+    else if(bp.sbp>=160||bp.dbp>=100) out.push(`血压 ${bp.sbp}/${bp.dbp} mmHg，明显偏高，请尽快复测并联系医生。`);
+  }
   return out;
+}
+/* 生成前的数据完整度提示：每条都能跳到对应录入位置 */
+function aiDataGaps(){
+  const gaps=[], x=dailyOf(), t=today();
+  const bpDate=x.bp.map(e=>e.d).sort().pop()||'';
+  const wtDate=x.wt.map(e=>e.d).sort().pop()||'';
+  if(!bpDate) gaps.push({t:'还没有血压记录，无法判断容量负荷与降压效果',go:'daily'});
+  else if(daysBetween(bpDate,t)>7) gaps.push({t:`最近一次血压在 ${daysBetween(bpDate,t)} 天前，建议补录近 7 天数据`,go:'daily'});
+  if(!wtDate) gaps.push({t:'还没有体重记录，无法判断容量变化与水肿',go:'daily'});
+  else if(daysBetween(wtDate,t)>7) gaps.push({t:`最近一次体重在 ${daysBetween(wtDate,t)} 天前，建议补录`,go:'daily'});
+  const h=last('hgb');
+  if(!h) gaps.push({t:'没有血红蛋白记录，影响贫血评估',go:'lab',key:'hgb'});
+  else if(daysBetween(h.date,t)>90) gaps.push({t:`血红蛋白最近一次在 ${h.date}，已 ${daysBetween(h.date,t)} 天，建议复查`,go:'lab',key:'hgb'});
+  return gaps;
+}
+function aiGapsHtml(){
+  const gaps=aiDataGaps(); if(!gaps.length) return '';
+  return `<div class="ai-sec"><h3>补全这些数据，解读会更准确</h3>${gaps.map(g=>
+    `<div class="ai-gap"><div class="g">${esc(g.t)}</div>
+      <button class="mini" onclick="gotoEntry('${g.go}','${g.key||''}')">去补录</button></div>`).join('')}</div>`;
+}
+function gotoEntry(kind,key){
+  closeAiSheet();
+  const navEl=document.querySelector('nav div[data-p="log"]');
+  if(navEl) go('log',navEl);
+  setTimeout(()=>{
+    if(kind==='daily'){
+      renderDaily();
+      const el=document.getElementById('dlSbp');
+      if(el){ el.focus(); el.scrollIntoView({block:'center',behavior:'smooth'}); }
+    }else{
+      renderRpt();
+      const sel=document.getElementById('labKey');
+      if(sel&&key&&DICTBYKEY.has(key)) sel.value=key;
+      const v=document.getElementById('labVal');
+      if(v){ v.focus(); v.scrollIntoView({block:'center',behavior:'smooth'}); }
+    }
+  },60);
 }
 async function sha256Hex(text){
   try{
@@ -3986,6 +4146,7 @@ function renderAiAdvice(cache,stale){
     aiSection('生活方式建议',a.lifestyle),
     aiSection('建议复查',a.followUp),
     aiSection('数据缺口',a.dataGaps),
+    aiGapsHtml(),
     `<div class="ai-meta">生成于 ${esc(cache.generatedAt?String(cache.generatedAt).replace('T',' ').slice(0,16):'—')} · ${esc(cache.model||'AI')}</div>`,
     `<div class="ai-dis">${esc(aiTxt(a.disclaimer)||'以上内容仅供个人健康管理参考，不构成医疗建议，也不能替代肾内科医生的诊疗。任何用药调整请咨询医生。')}</div>`,
     '<div class="ai-ops"><button class="btn ghost sm" onclick="startAiAdvice()">重新生成</button><button class="btn ghost sm" onclick="closeAiSheet()">关闭</button></div>'
@@ -4056,7 +4217,7 @@ function go(p,el){
   if(ib) ib.style.display=(p==='chart'||!ib.classList.contains('fixed'))?'':'none';
   if(p==='chart'){ initTrendSel(); renderSeg(); drawChart(); renderGoals(); setTimeout(()=>chart&&chart.resize(),50); }
   if(p==='visit') renderVisit(); else setDefaultHeader();
-  if(p==='log') renderRpt();
+  if(p==='log'){ renderRpt(); renderDaily(); }
 }
 
 /* ==================== 登录 ==================== */
@@ -4153,7 +4314,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.12.3 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.13.0 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
@@ -4162,7 +4323,7 @@ async function initApp(){
   // 指标字典就绪后再填手动补录的下拉（按化验类型/归类/标准名分组）
   document.getElementById('labKey').innerHTML=metricOptions('crea');
   // 图表库可能还在下载（首次约 1MB），先渲染不依赖图表的页面，避免整页空白
-  renderRpt(); renderKnow(); initImport(); renderGoals();
+  renderRpt(); renderDaily(); renderKnow(); initImport(); renderGoals();
   if(window.__echartsReady) await window.__echartsReady;
   renderHome();
   setDefaultHeader();
