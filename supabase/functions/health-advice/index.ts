@@ -39,6 +39,17 @@ function serverRedFlags(ctx: any): string[] {
   if (hco3 && Number(hco3.value) < 18) out.push(`碳酸氢盐 ${hco3.value} mmol/L，明显偏低，提示酸中毒风险，请尽快就医。`);
   if (hgb && Number(hgb.value) < 90) out.push(`血红蛋白 ${hgb.value} g/L，明显偏低，请尽快评估贫血原因。`);
   if (egfr && Number(egfr.value) < 15) out.push(`eGFR ${egfr.value}，已低于 15，请尽快与肾内科讨论后续方案。`);
+  const symItems = Array.isArray(ctx?.symptoms?.items) ? ctx.symptoms.items : [];
+  const symOf = (key: string) => symItems.find((x: any) => x && x.key === key) || null;
+  const breath = symOf('breath');
+  const edema = symOf('edema');
+  const wt = ctx?.daily?.weight;
+  if (breath && Number(breath.latest) >= 3) {
+    out.push('近期记录明显气促，请尽快联系肾内科；若静息时也气促或夜间不能平卧，请立即就医。');
+  } else if (breath && Number(breath.latest) >= 2 && edema && Number(edema.latest) >= 2 &&
+    wt && wt.delta3d != null && Number(wt.delta3d) > 2) {
+    out.push('气促伴下肢水肿，且 3 天内体重增加超过 2 kg，提示容量负荷可能过重，请尽快联系医生。');
+  }
   const given = Array.isArray(ctx?.redFlags) ? ctx.redFlags.map((x: any) => String(x || '').trim()).filter(Boolean) : [];
   return [...new Set([...given, ...out])].slice(0, 8);
 }

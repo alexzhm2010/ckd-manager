@@ -79,6 +79,18 @@ margin-bottom:8px;font-size:13.5px;border-left:3px solid}
 display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;cursor:pointer;transition:.15s}
 .chk.on{background:var(--green);border-color:var(--green)}
 .chk.on::after{content:"✓"}
+/* ==== 症状自查 ==== */
+.sym-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px dotted #eceff3}
+.sym-row:last-child{border-bottom:none;padding-bottom:0}
+.sym-n{flex:1;min-width:0;font-size:13px;line-height:1.4}
+.sym-n span{display:block;font-size:10.5px;color:#a7b2be}
+.sym-btns{display:flex;gap:4px;flex:0 0 auto}
+.sym-btn{border:1px solid #dbe3ea;background:#fff;border-radius:9px;padding:4px 9px;
+font-size:11.5px;font-family:inherit;color:#5b6b7a;cursor:pointer;transition:.12s;min-width:32px}
+.sym-btn.on{background:var(--pri2);border-color:var(--pri2);color:#fff;font-weight:600}
+.sym-btn.on.lv1{background:#e7a23a;border-color:#e7a23a}
+.sym-btn.on.lv2{background:#e08b0a;border-color:#e08b0a}
+.sym-btn.on.lv3{background:var(--red);border-color:var(--red)}
 /* ==== 表单 ==== */
 .row{display:flex;gap:10px;margin-bottom:10px}
 .field{flex:1;min-width:0}
@@ -444,6 +456,23 @@ border-radius:50%;animation:spin .85s linear infinite}
       <div class="field" style="flex:0 0 auto;display:flex;align-items:end"><button class="btn" onclick="saveDaily()">保存</button></div>
     </div>
     <div class="muted" id="dlSum" style="margin-top:8px;line-height:1.7"></div>
+  </div>
+  <div class="card" id="symCard">
+    <h2><span class="t"><span class="bar"></span>症状自查</span><span class="muted" id="symHint"></span></h2>
+    <div class="muted" style="font-size:11.5px;margin-bottom:9px;line-height:1.65">
+      每天 10 秒记录最近 24 小时的感觉。无症状也建议记录一次，AI 解读会结合症状、体重和血压一起判断容量状态。
+    </div>
+    <div class="row">
+      <div class="field"><label>日期</label><input type="date" id="symDate" onchange="symDateChange()"></div>
+    </div>
+    <div id="symRows"></div>
+    <div class="field" style="margin-top:10px"><label>备注（可选）</label>
+      <input id="symNote" maxlength="40" placeholder="例如：夜间不能平卧、食欲差"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn ghost sm" style="flex:1" onclick="markNoSym()">今天无症状</button>
+      <button class="btn sm" style="flex:1" onclick="saveSym()">保存症状</button>
+    </div>
+    <div class="muted" id="symSum" style="margin-top:8px;line-height:1.7"></div>
   </div>
   <div class="card">
     <h2><span class="t"><span class="bar"></span>化验报告（全部项目）</span><span class="muted" id="rptCount"></span></h2>
@@ -3730,12 +3759,14 @@ function renderVisit(){
 function dailyOf(){
   if(!DB.daily||typeof DB.daily!=='object') DB.daily={bp:[],wt:[],water:[]};
   ['bp','wt','water'].forEach(k=>{ if(!Array.isArray(DB.daily[k])) DB.daily[k]=[]; });
+  if(!DB.daily.sym||typeof DB.daily.sym!=='object') DB.daily.sym={};
   return DB.daily;
 }
 function pruneDaily(x,days){
   const d=new Date(); d.setDate(d.getDate()-days);
   const cut=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
   ['bp','wt','water'].forEach(k=>{ x[k]=x[k].filter(e=>e.d>=cut).slice(-500); });
+  Object.keys(x.sym||{}).forEach(k=>{ if(k<cut) delete x.sym[k]; });
 }
 function saveDaily(){
   const d=(document.getElementById('dlDate').value||today());
@@ -3810,8 +3841,94 @@ function renderDaily(){
   const box=document.getElementById('dlSum');
   if(box) box.innerHTML=out.length?out.map(esc).join('；')+'。':'还没有记录，填一项即可保存。';
 }
+/* ==================== 症状自查 ==================== */
+const SYM_ITEMS=[
+ {k:'fatigue',n:'乏力',h:'活动后容易累'},
+ {k:'breath',n:'气促',h:'活动后或静息时气短'},
+ {k:'noc',n:'夜尿增多',h:'昨晚起夜次数',lv:['无','1 次','2 次','≥3 次']},
+ {k:'edema',n:'下肢水肿',h:'脚踝或小腿'},
+ {k:'appetite',n:'食欲下降',h:'不想吃或吃不下'},
+ {k:'palp',n:'心悸',h:'心跳快或乱'}
+];
+const SYM_LV=['无','轻','中','重'];
+let symDraft={};
+function symDateVal(){ const el=document.getElementById('symDate'); return (el&&el.value)||today(); }
+function renderSym(){
+  const el=document.getElementById('symDate'); if(el&&!el.value) el.value=today();
+  const d=symDateVal(), rec=((dailyOf().sym||{})[d])||{};
+  symDraft={};
+  SYM_ITEMS.forEach(it=>{
+    const v=rec[it.k];
+    symDraft[it.k]=(v==null||v==='')?null:Number(v);
+  });
+  symDraft.note=rec.note||'';
+  const n=document.getElementById('symNote'); if(n) n.value=symDraft.note;
+  const hint=document.getElementById('symHint');
+  if(hint) hint.textContent=d===today()?'今天':'补记 '+d;
+  drawSymRows(); renderSymSum();
+}
+function drawSymRows(){
+  const box=document.getElementById('symRows'); if(!box) return;
+  box.innerHTML=SYM_ITEMS.map(it=>{
+    const lvs=it.lv||SYM_LV;
+    return `<div class="sym-row"><div class="sym-n">${esc(it.n)}<span>${esc(it.h)}</span></div>
+      <div class="sym-btns">${lvs.map((lb,i)=>{
+        const on=symDraft[it.k]===i;
+        return `<button class="sym-btn${on?' on lv'+i:''}" onclick="setSym('${it.k}',${i})">${esc(lb)}</button>`;
+      }).join('')}</div></div>`;
+  }).join('');
+}
+function setSym(k,n){ symDraft[k]=(symDraft[k]===n?null:n); drawSymRows(); }
+function symDateChange(){ renderSym(); }
+function markNoSym(){ SYM_ITEMS.forEach(it=>{ symDraft[it.k]=0; }); saveSym(); }
+function saveSym(){
+  const d=symDateVal();
+  if(d>today()) return toast('日期不能晚于今天');
+  const rec={}; let any=false;
+  SYM_ITEMS.forEach(it=>{
+    const v=symDraft[it.k];
+    if(v!=null&&isFinite(Number(v))&&Number(v)>=0&&Number(v)<=3){ rec[it.k]=Number(v); any=true; }
+  });
+  const noteEl=document.getElementById('symNote');
+  const note=(noteEl&&noteEl.value||'').trim().slice(0,40);
+  if(!any&&!note) return toast('请至少选择一项症状，或写一句备注');
+  if(note) rec.note=note;
+  const x=dailyOf();
+  x.sym[d]=rec;
+  pruneDaily(x,180);
+  save();
+  renderSym(); renderHome(); renderVisit();
+  toast('症状已保存');
+}
+function symptomSummary(){
+  const sym=dailyOf().sym||{}, t=today();
+  const dates=Object.keys(sym).sort();
+  const d14=dates.filter(d=>daysBetween(d,t)<=14);
+  const items=SYM_ITEMS.map(it=>{
+    let days=0,total=0,latest=null,latestDate='',cur=0,prev=0;
+    d14.forEach(d=>{
+      const v=sym[d][it.k]; if(v==null) return;
+      total+=v; if(v>0) days++;
+      latest=v; latestDate=d;
+      if(daysBetween(d,t)<=7) cur+=v; else prev+=v;
+    });
+    const trend=(prev||cur)?(cur>prev?'up':cur<prev?'down':'flat'):null;
+    return {key:it.k,name:it.n,days,total,latest,latestDate,trend};
+  }).filter(x=>x.latest!=null);
+  const lastDate=dates[dates.length-1]||'';
+  const lastNote=lastDate?(sym[lastDate].note||''):'';
+  return {count14:d14.length,lastDate,items,note:lastNote};
+}
+function renderSymSum(){
+  const box=document.getElementById('symSum'), s=symptomSummary();
+  if(!box) return;
+  if(!s.items.length){ box.textContent='还没有症状记录，无症状也建议记录一次。'; return; }
+  const bits=s.items.filter(x=>x.days>0).map(x=>`${x.name} ${x.days} 天`).join('、');
+  box.textContent=`近 14 天记录 ${s.count14} 次`+(bits?`；出现：${bits}`:'；未报告明显症状')
+    +(s.note?`；最近备注：${s.note}`:'')+'。';
+}
 /* ==================== 健康档案 + AI 解读 ==================== */
-const AI_PROMPT_VERSION='CKD_ADVISOR_V2';
+const AI_PROMPT_VERSION='CKD_ADVISOR_V3';
 const AI_CONSENT_VERSION='2026-11';
 let profOpen=false, aiOpen=false, aiLoading=false, aiError='', aiContext=null;
 const PROF_CB=[
@@ -4043,12 +4160,13 @@ async function buildAiContext(){
     profile:{age:ageOf(p)?Number(ageOf(p)):null,sex:p.sex||null,ckdStage:p.ckdStage||null,
       primaryCause:p.primaryCause||null,dryWeight:p.dryWeight||null,
       comorbidities:p.comorbidities||[],allergies:p.allergies||''},
-    labs,trends,meds,symptoms:[],daily,
+    labs,trends,meds,symptoms:symptomSummary(),daily,
     review,redFlags,
     dataSummary:{recordedKeys:keys.length,latestLabDate:labs.length?labs.map(x=>x.date).sort().pop():'',
       lastReportDate:Object.keys(DB.rpt||{}).sort().pop()||'',
       bpDate:(dailyOf().bp||[]).map(e=>e.d).sort().pop()||'',
       weightDate:daily.weight?daily.weight.date:'',
+      symptomDate:symptomSummary().lastDate,
       bpCount7d:daily.bp7?daily.bp7.count:0}
   };
   const hash=await sha256Hex(JSON.stringify(data)+'|'+AI_PROMPT_VERSION);
@@ -4067,6 +4185,15 @@ function aiLocalRedFlags(){
     if(bp.sbp>=180||bp.dbp>=110) out.push(`血压 ${bp.sbp}/${bp.dbp} mmHg，已达到需要立即处理的范围，请尽快联系医生或急诊。`);
     else if(bp.sbp>=160||bp.dbp>=100) out.push(`血压 ${bp.sbp}/${bp.dbp} mmHg，明显偏高，请尽快复测并联系医生。`);
   }
+  // 症状红线：只看近 3 天，避免旧记录反复触发
+  const sym=dailyOf().sym||{};
+  const sd=Object.keys(sym).sort().pop();
+  if(sd&&daysBetween(sd,today())<=3){
+    const s=sym[sd]||{}, w=dailySummary().weight;
+    if(s.breath>=3) out.push('近期记录明显气促，请尽快联系肾内科；若静息时也气促或夜间不能平卧，请立即就医。');
+    else if(s.breath>=2&&s.edema>=2&&w&&w.delta3d!=null&&w.delta3d>2)
+      out.push('气促伴下肢水肿，且 3 天内体重增加超过 2 kg，提示容量负荷可能过重，请尽快联系医生。');
+  }
   return out;
 }
 /* 生成前的数据完整度提示：每条都能跳到对应录入位置 */
@@ -4078,6 +4205,10 @@ function aiDataGaps(){
   else if(daysBetween(bpDate,t)>7) gaps.push({t:`最近一次血压在 ${daysBetween(bpDate,t)} 天前，建议补录近 7 天数据`,go:'daily'});
   if(!wtDate) gaps.push({t:'还没有体重记录，无法判断容量变化与水肿',go:'daily'});
   else if(daysBetween(wtDate,t)>7) gaps.push({t:`最近一次体重在 ${daysBetween(wtDate,t)} 天前，建议补录`,go:'daily'});
+  const symDates=Object.keys(dailyOf().sym||{}).sort();
+  const symDate=symDates[symDates.length-1]||'';
+  if(!symDate) gaps.push({t:'还没有症状记录，影响容量与心肾状态判断',go:'sym'});
+  else if(daysBetween(symDate,t)>14) gaps.push({t:`最近一次症状记录在 ${daysBetween(symDate,t)} 天前，建议补记`,go:'sym'});
   const h=last('hgb');
   if(!h) gaps.push({t:'没有血红蛋白记录，影响贫血评估',go:'lab',key:'hgb'});
   else if(daysBetween(h.date,t)>90) gaps.push({t:`血红蛋白最近一次在 ${h.date}，已 ${daysBetween(h.date,t)} 天，建议复查`,go:'lab',key:'hgb'});
@@ -4108,6 +4239,10 @@ function gotoEntry(kind,key){
       renderDaily();
       const el=document.getElementById('dlSbp');
       if(el){ el.focus(); el.scrollIntoView({block:'center',behavior:'smooth'}); }
+    }else if(kind==='sym'){
+      renderSym();
+      const el=document.getElementById('symCard');
+      if(el) el.scrollIntoView({block:'start',behavior:'smooth'});
     }else{
       renderRpt();
       const sel=document.getElementById('labKey');
@@ -4233,7 +4368,7 @@ function go(p,el){
   if(ib) ib.style.display=(p==='chart'||!ib.classList.contains('fixed'))?'':'none';
   if(p==='chart'){ initTrendSel(); renderSeg(); drawChart(); renderGoals(); setTimeout(()=>chart&&chart.resize(),50); }
   if(p==='visit') renderVisit(); else setDefaultHeader();
-  if(p==='log'){ renderRpt(); renderDaily(); }
+  if(p==='log'){ renderRpt(); renderDaily(); renderSym(); }
 }
 
 /* ==================== 登录 ==================== */
@@ -4330,7 +4465,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.14.0 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.15.0 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
@@ -4339,7 +4474,7 @@ async function initApp(){
   // 指标字典就绪后再填手动补录的下拉（按化验类型/归类/标准名分组）
   document.getElementById('labKey').innerHTML=metricOptions('crea');
   // 图表库可能还在下载（首次约 1MB），先渲染不依赖图表的页面，避免整页空白
-  renderRpt(); renderDaily(); renderKnow(); initImport(); renderGoals();
+  renderRpt(); renderDaily(); renderSym(); renderKnow(); initImport(); renderGoals();
   if(window.__echartsReady) await window.__echartsReady;
   renderHome();
   setDefaultHeader();
