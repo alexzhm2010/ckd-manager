@@ -494,17 +494,6 @@ border-radius:50%;animation:spin .85s linear infinite}
     <div class="muted" id="medSum" style="margin-top:8px;line-height:1.7"></div>
   </div>
   <div class="card">
-    <h2><span class="t"><span class="bar"></span>化验报告（全部项目）</span><span class="muted" id="rptCount"></span></h2>
-    <div class="muted" style="font-size:11.5px;margin-bottom:9px;line-height:1.65">
-      每份报告默认折叠，只显示日期、医院、科室与项数；点「展开」按「指标 / 结果 / 单位 / 参考范围」列出这份报告的全部标准指标。指标名称已在导入或补录时自动归一；参考范围统一显示标准基准区间，异常判断也以基准表为准。
-    </div>
-    <div class="mt-bar">
-      <input id="rptQ" placeholder="筛选指标名称（标准名或原始名）" oninput="rptSearch(this.value)">
-      <button class="mini" id="rptClear" onclick="rptClearQ()" style="display:none;flex:0 0 auto">清空</button>
-    </div>
-    <div id="rptList"></div>
-  </div>
-  <div class="card">
     <h2><span class="t"><span class="bar"></span>报告导入</span><span class="muted" id="impState"></span></h2>
     <div class="imp-zone" id="impZone">
       <div class="imp-ic">📄</div>
@@ -539,6 +528,17 @@ border-radius:50%;animation:spin .85s linear infinite}
       <div class="field"><label>数值</label><input type="number" id="labVal" step="0.01" inputmode="decimal"></div>
       <div class="field" style="flex:0 0 auto;display:flex;align-items:end"><button class="btn" onclick="addLab()">添加</button></div>
     </div>
+  </div>
+  <div class="card">
+    <h2><span class="t"><span class="bar"></span>化验报告（全部项目）</span><span class="muted" id="rptCount"></span></h2>
+    <div class="muted" style="font-size:11.5px;margin-bottom:9px;line-height:1.65">
+      每份报告默认折叠，只显示日期、医院、科室与项数；点「展开」按「指标 / 结果 / 单位 / 参考范围」列出这份报告的全部标准指标。指标名称已在导入或补录时自动归一；参考范围统一显示标准基准区间，异常判断也以基准表为准。
+    </div>
+    <div class="mt-bar">
+      <input id="rptQ" placeholder="筛选指标名称（标准名或原始名）" oninput="rptSearch(this.value)">
+      <button class="mini" id="rptClear" onclick="rptClearQ()" style="display:none;flex:0 0 auto">清空</button>
+    </div>
+    <div id="rptList"></div>
   </div>
 </section>
 
@@ -4576,7 +4576,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.16.0 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.16.1 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
