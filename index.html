@@ -747,6 +747,24 @@ let RPTIDX=new Map();         // 规范键 -> Map(date->v)：报告里存过的�
 let supa=null, cloudUser=null, cloudErrMsg='';
 let cloudFlushing=false, cloudSyncTimer=null;
 let pendingUp=new Map(), pendingDel=new Set();
+/* 待同步队列落盘：手机切后台/立即刷新时定时器可能不执行，下次登录自动补传 */
+const OUTBOX_KEY='kidney_outbox_v1';
+function saveOutbox(){
+  if(!CLOUD_ON) return;
+  try{
+    const up=[...pendingUp.values()], del=[...pendingDel];
+    if(!up.length&&!del.length){ localStorage.removeItem(OUTBOX_KEY); return; }
+    localStorage.setItem(OUTBOX_KEY,JSON.stringify({u:cloudUser?cloudUser.id:'',up,del}));
+  }catch(e){}
+}
+function loadOutbox(){
+  try{
+    const o=JSON.parse(localStorage.getItem(OUTBOX_KEY)||'null');
+    if(!o||!o.u||!cloudUser||o.u!==cloudUser.id){ localStorage.removeItem(OUTBOX_KEY); return; }
+    (o.up||[]).forEach(r=>{ if(r&&r.uid) pendingUp.set(r.uid,r); });
+    (o.del||[]).forEach(x=>{ if(x) pendingDel.add(x); });
+  }catch(e){}
+}
 
 function blankDb(){ return JSON.parse(JSON.stringify(DEFAULT)); }
 
@@ -1022,6 +1040,7 @@ function queueCloudSync(ups,del){
   (ups||[]).forEach(r=>{ pendingDel.delete(r.uid); pendingUp.set(r.uid,r); });
   (del||[]).forEach(uid=>{ pendingUp.delete(uid); pendingDel.add(uid); });
   if(cloudSyncTimer) clearTimeout(cloudSyncTimer);
+  saveOutbox();
   cloudSyncTimer=setTimeout(()=>{ cloudSyncTimer=null; flushCloud(); },1200);
 }
 
@@ -1048,9 +1067,11 @@ async function flushCloud(){
       if(error) throw error;
     }
     cloudErrMsg='';
+    saveOutbox();
   }catch(e){
     up.forEach(r=>pendingUp.set(r.uid,r));
     del.forEach(uid=>pendingDel.add(uid));
+    saveOutbox();
     const first=!cloudErrMsg;
     cloudErrMsg=(e&&(e.message||e.error_description||e.hint))||String(e);
     console.warn('云端同步失败',e);
@@ -4556,6 +4577,8 @@ async function doCloudSignUp(){
 
 document.getElementById('cloudPwd').addEventListener('keydown',e=>{ if(e.key==='Enter') doCloudLogin(); });
 
+window.addEventListener('pagehide',()=>{ if(cloudUser) flushCloud(); });
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden'&&cloudUser) flushCloud(); });
 /* 启动数据：只从云端 facts 表读取，本机不保留数据 */
 async function bootstrapData(){
   if(!CLOUD_ON||!cloudUser){ applyFacts([]); return; }
@@ -4584,12 +4607,14 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.16.3 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.16.4 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
   document.getElementById('labDate').value=today();
   await bootstrapData();
+  loadOutbox();
+  if(pendingUp.size||pendingDel.size) flushCloud();
   // 指标字典就绪后再填手动补录的下拉（按化验类型/归类/标准名分组）
   document.getElementById('labKey').innerHTML=metricOptions('crea');
   // 图表库可能还在下载（首次约 1MB），先渲染不依赖图表的页面，避免整页空白
