@@ -72,12 +72,43 @@ function normalizeAdvice(a: any) {
   return out;
 }
 
+/* 模型输出被 max_tokens 截断时，按括号栈补全，尽量保住已经生成的内容 */
+function closeJson(input: string): string {
+  let s = input.replace(/[,\s]+$/, '');
+  let inStr = false, esc = false;
+  const stack: string[] = [];
+  for (const ch of s) {
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+    } else if (ch === '"') inStr = true;
+    else if (ch === '{' || ch === '[') stack.push(ch);
+    else if (ch === '}' || ch === ']') stack.pop();
+  }
+  if (esc) s = s.slice(0, -1);
+  if (inStr) s += '"';
+  while (stack.length) s += stack.pop() === '{' ? '}' : ']';
+  return s;
+}
+
 function parseJson(text: string): any {
   let t = String(text || '').trim();
   t = t.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   const s = t.indexOf('{'), e = t.lastIndexOf('}');
   if (s >= 0 && e > s) t = t.slice(s, e + 1);
-  return JSON.parse(t);
+  try { return JSON.parse(t); } catch (_) { /* 继续尝试修复 */ }
+  try { return JSON.parse(closeJson(t)); } catch (_) { /* 继续尝试截断点 */ }
+  for (let i = t.length - 1; i > 0; i--) {
+    if (t[i] !== '}' && t[i] !== ']' && t[i] !== '"') continue;
+    try { return JSON.parse(closeJson(t.slice(0, i + 1))); } catch (_) { /* 换更早的截断点 */ }
+  }
+  // 截断落在数字/关键字中间时，退到上一个逗号边界，丢掉最后一个不完整元素
+  let cut = t.length;
+  while ((cut = t.lastIndexOf(',', cut - 1)) > 0) {
+    try { return JSON.parse(closeJson(t.slice(0, cut))); } catch (_) { /* 继续向前找 */ }
+  }
+  throw new Error('AI 输出过长被截断');
 }
 
 async function callModel(messages: any[], jsonMode = true): Promise<string> {
@@ -85,7 +116,7 @@ async function callModel(messages: any[], jsonMode = true): Promise<string> {
     model: MODEL,
     messages,
     temperature: 0.25,
-    max_tokens: 1200,
+    max_tokens: 2400,
   };
   if (jsonMode) body.response_format = { type: 'json_object' };
   const r = await fetch(`${BASE_URL}/chat/completions`, {
@@ -142,15 +173,19 @@ Deno.serve(async (req) => {
     try {
       advice = normalizeAdvice(parseJson(raw));
     } catch (_) {
-      // 只修复一次格式，不重复生成内容
+      // 只修复一次格式，不重复生成内容；要求更短，避免再次被截断
       raw = await callModel([
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'assistant', content: raw },
-        { role: 'user', content: '上面的输出不是合法 JSON。请只输出修正后的合法 JSON 对象，不要任何解释或代码块。' },
+        { role: 'user', content: '上面的输出不是合法 JSON 或被截断。请输出修正后的完整 JSON 对象，不要解释或代码块；各数组最多 3 条，每条不超过 60 字。' },
       ], true);
-      advice = normalizeAdvice(parseJson(raw));
+      try {
+        advice = normalizeAdvice(parseJson(raw));
+      } catch (_) {
+        throw new Error('AI 解读内容过长，请重试');
+      }
     }
-    if (!advice) return json({ error: 'AI 返回内容为空或格式不正确' }, 502);
+    if (!advice) return json({ error: 'AI 返回内容为空或格式不正确，请重试' }, 502);
 
     // 服务端红线永远排在最前
     advice.redFlags = [...new Set([...flags, ...(advice.redFlags || [])])].slice(0, 8);
