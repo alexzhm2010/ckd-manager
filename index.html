@@ -4042,7 +4042,11 @@ async function startAiAdvice(){
     toast('健康解读已生成');
   }catch(e){
     aiLoading=false;
-    aiError=(e&&e.name==='AbortError')?'生成超时，请重试':((e&&e.message)||String(e));
+    let msg=(e&&e.name==='AbortError')?'生成超时，请重试':((e&&e.message)||String(e));
+    if(!msg||/Failed to fetch|NetworkError|load failed/i.test(msg)){
+      msg='无法连接 AI 服务，请检查网络，或确认 health-advice 函数已部署';
+    }
+    aiError=msg;
     renderAiSheet();
   }
 }
@@ -4165,7 +4169,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.12.0 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.12.1 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
