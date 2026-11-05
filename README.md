@@ -41,13 +41,35 @@
 ```
 ├── index.html        # 应用主体（单文件，内含全部样式与逻辑）
 ├── cloud-config.js   # Supabase 云端配置
+├── skills/
+│   └── ckd-advisor/SKILL.md   # CKD 健康顾问的规则与输出规范
 └── supabase/
-    └── schema.sql    # 云端 facts 表结构、唯一索引与 RLS 策略
+    ├── schema.sql    # 云端 facts 表结构、唯一索引与 RLS 策略
+    └── functions/
+        ├── ocr-report/index.ts
+        └── health-advice/       # AI 健康解读代理（可选）
 ```
 
 ### 更新数据
 
 直接在页面里补录、导入化验报告即可；数据会写入 `facts` 表并同步到云端，不需要改代码或重新加密。
+
+### 🤖 AI 健康解读（可选）
+
+复查页的「生成健康解读」通过 Supabase Edge Function 调用通义千问，不需要新增数据表；结果缓存复用 `facts` 的 `block|aiAdvice` 行。
+
+首次启用需要两步：
+
+```bash
+# 1. 配置模型密钥（只放服务端，不要写进前端）
+supabase secrets set QWEN_API_KEY=你的DashScope密钥
+# 可选：QWEN_MODEL=qwen-plus（默认）、QWEN_BASE_URL=兼容端点
+
+# 2. 部署函数
+supabase functions deploy health-advice
+```
+
+未配置 `QWEN_API_KEY` 时，页面会提示“AI 服务尚未配置”，不影响其他功能。生成前必须明确同意数据用于 AI 解读；只发送去标识化指标，不发送姓名、医院和原始报告文字。
 
 ## ⚠️ 免责声明
 
