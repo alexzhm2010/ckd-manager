@@ -649,6 +649,7 @@ const CHECK_GROUPS=[
  {id:'glu',  n:'生化 · 糖代谢',days:90,labs:[['生化','糖代谢']]},
  {id:'lipid',n:'生化 · 血脂',days:120,labs:[['生化','血脂']]},
  {id:'enzyme',n:'生化 · 心肌酶',days:180,labs:[['生化','心肌酶']]},
+ {id:'cardio',n:'生化 · 心功能',days:180,labs:[['生化','心功能']]},
  {id:'blood',n:'血常规',days:90,labs:[['血常规','血细胞']]},
  {id:'urine',n:'尿常规',days:90,labs:[['尿常规','尿液干化学'],['尿常规','尿液一般性状'],['尿常规','尿沉渣']]},
  {id:'u24',  n:'24 小时尿',days:90,labs:[['24小时尿','24小时尿液定量']]},
@@ -664,9 +665,13 @@ const CHECK_MANUAL=[
 // 字典不可用或缺项时，内置指标的兜底归属
 const KEY_GROUP={egfr:'renal',crea:'renal',urea:'renal',ua:'renal',cysc:'renal',acr:'renal',malb:'renal',
  k:'bone',ca:'bone',p:'bone',pth:'bone',hco3:'bone',
- alb:'liver',hgb:'blood',tc:'lipid',tg:'lipid',ldl:'lipid',upro:'u24'};
+ alb:'liver',hgb:'blood',tc:'lipid',tg:'lipid',ldl:'lipid',upro:'u24',
+ una:'u24',uca:'u24',uphos:'u24',ntprobnp:'cardio'};
 // 组内周期短于整组的指标：单独按自己的周期提醒
-const KEY_DAYS={k:30,ua:60,upro:45,pth:90};
+const KEY_DAYS={k:30,ua:60,upro:45,pth:90,ntprobnp:180};
+
+/* 只记录趋势、不做自动异常判定的指标：无固定数值参考区间 */
+const RECORD_ONLY=new Set(['una','uca','uphos','ntprobnp']);
 
 const KNOW=[
  {t:'CKD 分期怎么看',c:'按 eGFR：1期≥90，2期60-89，3a期45-59，3b期30-44，4期15-29，5期&lt;15。你现在是4期（eGFR约24），重点目标是延缓进入5期。'},
@@ -1422,7 +1427,8 @@ function addLab(){
   const v=Number(raw);
   if(!isFinite(v)) return toast('请输入有效数值');
   const bref=baselineRef(k);
-  if(!bref||bref.lo==null||bref.hi==null) return toast('该指标不支持数值补录');
+  const numRef=bref&&bref.lo!=null&&bref.hi!=null;
+  if(!numRef&&!RECORD_ONLY.has(k)) return toast('该指标不支持数值补录');
   const dm=DICTBYKEY.get(k);
   const nm=(META[k]&&META[k].n)||(dm&&dm.n)||k;
   // 同日同项已存在时允许覆盖，不再提示「先删除旧记录」——页面里并没有删除入口
@@ -2808,7 +2814,7 @@ function buildMetricBase(){
   return canonGroups().map(g=>{
     const items=g.items.filter(o=>{
       const r=baselineRef(o.k);
-      return r&&r.lo!=null&&r.hi!=null;
+      return (r&&r.lo!=null&&r.hi!=null)||RECORD_ONLY.has(o.k);
     });
     if(!items.length) return '';
     return `<optgroup label="${esc(g.lab+' · '+g.cat)}">`+
@@ -4003,7 +4009,7 @@ function renderAiSheet(){
 }
 async function buildAiContext(){
   const rec=allRecords(), bad=recentBadKeys(rec,3);
-  const keySet=new Set([...CKD4_CORE,...bad,...ORDER]);
+  const keySet=new Set([...CKD4_CORE,...bad,...ORDER,...[...RECORD_ONLY].filter(k=>seriesOf(k).length)]);
   const keys=[...keySet].filter(k=>seriesOf(k).length).slice(0,30);
   const labs=[],trends=[];
   keys.forEach(k=>{
@@ -4075,6 +4081,16 @@ function aiDataGaps(){
   const h=last('hgb');
   if(!h) gaps.push({t:'没有血红蛋白记录，影响贫血评估',go:'lab',key:'hgb'});
   else if(daysBetween(h.date,t)>90) gaps.push({t:`血红蛋白最近一次在 ${h.date}，已 ${daysBetween(h.date,t)} 天，建议复查`,go:'lab',key:'hgb'});
+  if(DICTBYKEY.has('ntprobnp')){
+    const n=last('ntprobnp');
+    if(!n) gaps.push({t:'没有 NT-proBNP 记录，心功能评估依据不足',go:'lab',key:'ntprobnp'});
+    else if(daysBetween(n.date,t)>180) gaps.push({t:`NT-proBNP 最近一次在 ${n.date}，已 ${daysBetween(n.date,t)} 天，建议复查`,go:'lab',key:'ntprobnp'});
+  }
+  if(DICTBYKEY.has('una')){
+    const u=last('una');
+    if(!u) gaps.push({t:'没有尿钠记录，无法评估钠摄入与容量管理',go:'lab',key:'una'});
+    else if(daysBetween(u.date,t)>90) gaps.push({t:`尿钠最近一次在 ${u.date}，已 ${daysBetween(u.date,t)} 天，建议复查`,go:'lab',key:'una'});
+  }
   return gaps;
 }
 function aiGapsHtml(){
@@ -4314,7 +4330,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.13.0 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.14.0 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
