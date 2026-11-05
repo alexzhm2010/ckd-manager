@@ -812,7 +812,7 @@ function deriveFacts(db,touch){
     const changed=!prev||JSON.stringify((prev.meta||{}).data)!==JSON.stringify(v);
     rows.push({
       uid, kind:'block', key:k, name:k, value:null,
-      meta:{data:v}, source:prev&&!changed?(prev.source||'manual'):'manual',
+      meta:{data:JSON.parse(JSON.stringify(v))}, source:prev&&!changed?(prev.source||'manual'):'manual',
       updated_at:stamp(prev,changed), created_at:prev?prev.created_at:at
     });
   });
@@ -4610,7 +4610,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.16.6 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.16.7 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
