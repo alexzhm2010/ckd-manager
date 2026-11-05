@@ -3913,7 +3913,7 @@ function renderSym(){
   const hint=document.getElementById('symHint');
   const symDates=Object.keys(dailyOf().sym||{}).sort();
   const symLast=symDates[symDates.length-1];
-  if(hint) hint.textContent=symLast?'上次：'+fmtMD(symLast):'未录入';
+  if(hint) hint.textContent=symLast?(symLast===today()?'今天已记录':'上次：'+fmtMD(symLast)):'未录入';
   drawSymRows(); renderSymSum();
 }
 function drawSymRows(){
@@ -4610,7 +4610,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.16.7 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.16.8 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
