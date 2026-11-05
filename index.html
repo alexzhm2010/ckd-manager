@@ -652,6 +652,7 @@ function save(){
 let DB=load();
 
 const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+function fmtMD(s){ if(!s) return ''; const p=String(s).split('-'); return p.length===3?Number(p[1])+'月'+Number(p[2])+'日':s; }
 const daysBetween=(a,b)=>Math.round((new Date(b)-new Date(a))/86400000);
 
 /* ==================== 指标元数据 ==================== */
@@ -3846,7 +3847,9 @@ function renderDaily(){
   const el=document.getElementById('dlDate'); if(el&&!el.value) el.value=today();
   const x=dailyOf();
   const has=x.bp.some(e=>e.d===today())||x.wt.some(e=>e.d===today())||x.water.some(e=>e.d===today());
-  const hint=document.getElementById('dlHint'); if(hint) hint.textContent=has?'今天已记录':'今天未记录';
+  const dates=[...x.bp.map(e=>e.d),...x.wt.map(e=>e.d),...x.water.map(e=>e.d)].filter(Boolean).sort();
+  const last=dates[dates.length-1];
+  const hint=document.getElementById('dlHint'); if(hint) hint.textContent=last?(has?'今天已记录':'上次：'+fmtMD(last)):'未录入';
   const s=dailySummary(), out=[];
   if(s.bp7) out.push(`近 7 天血压 ${s.bp7.avgSbp}/${s.bp7.avgDbp} mmHg，达标 ${s.bp7.control}/${s.bp7.count}（目标 ${s.bp7.target}）`);
   if(s.weight){
@@ -3883,7 +3886,9 @@ function renderSym(){
   symDraft.note=rec.note||'';
   const n=document.getElementById('symNote'); if(n) n.value=symDraft.note;
   const hint=document.getElementById('symHint');
-  if(hint) hint.textContent=d===today()?'今天':'补记 '+d;
+  const symDates=Object.keys(dailyOf().sym||{}).sort();
+  const symLast=symDates[symDates.length-1];
+  if(hint) hint.textContent=symLast?'上次：'+fmtMD(symLast):'未录入';
   drawSymRows(); renderSymSum();
 }
 function drawSymRows(){
@@ -3965,7 +3970,8 @@ function renderMedPlan(){
     medDraft[m.k]={start:p.start||'',watch:Array.isArray(p.watch)?p.watch.slice():(MED_PLAN_DEF[m.k]||[]).slice()};
   });
   const hint=document.getElementById('medHint');
-  if(hint) hint.textContent=Object.keys(plan).length?Object.keys(plan).length+' 种已设置':'未设置';
+  const n=MEDS.filter(m=>plan[m.k]).length;
+  if(hint) hint.textContent=n?(plan._at?'设置于 '+fmtMD(plan._at):n+' 种已设置'):'未设置';
   drawMedRows(); renderMedResp();
 }
 function drawMedRows(){
@@ -3992,8 +3998,9 @@ function saveMedPlan(){
     plan[m.k]={start:d.start,watch:d.watch.slice()};
   });
   if(bad) return toast('用药开始日期不能晚于今天');
+  plan._at=today();
   DB.medPlan=plan; save(); renderMedPlan(); renderHome(); renderVisit();
-  toast(plan&&Object.keys(plan).length?'用药观察设置已保存':'已清空用药观察设置');
+  toast(MEDS.filter(m=>plan[m.k]).length?'用药观察设置已保存':'已清空用药观察设置');
 }
 function medResponse(){
   const plan=medPlanOf(), t=today(), out=[];
@@ -4576,7 +4583,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.16.1 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.16.2 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
