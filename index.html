@@ -492,7 +492,7 @@ border-radius:50%;animation:spin .85s linear infinite}
 
 <!-- ============ 复查 ============ -->
 <section class="page" id="p-visit">
-  <div class="card rev-hero" id="revHero"></div>
+  <div class="card" id="revHero"></div>
   <div class="card">
     <h2><span class="t"><span class="bar"></span>完整检查清单</span><span class="muted">按大类折叠 · 点击展开</span></h2>
     <div id="revList"></div>
@@ -3608,21 +3608,9 @@ function revItems(all,ctx){
   });
   return out;
 }
-function renderRevHero(items){
+function renderRevHero(){
   const el=document.getElementById('revHero'); if(!el) return;
-  const core=items.filter(it=>CKD4_CORE.has(it.k)&&it.last&&it.max>0);
-  const due=core.map(it=>revDueDate(it.last,it.max)).sort()[0]||'';
-  const left=due?daysBetween(today(),due):null;
-  const reds=items.filter(it=>revStatus(it).cls==='red');
-  const ambers=items.filter(it=>{ const s=revStatus(it); return s.over3&&s.cls!=='red'; });
-  const names=arr=>arr.slice(0,3).map(x=>x.n).join('、')+(arr.length>3?' 等':'');
-  const when=due?`建议 ${revCnDate(due)} 前去复查`:'建议尽快安排核心检查';
-  const sub=due?(left>0?`还有 ${left} 天`:`已超期 ${-left} 天`):'尚无核心项目记录';
-  let warn='<div class="rev-hero-warn ok">核心项目均在建议周期内</div>';
-  if(reds.length) warn=`<div class="rev-hero-warn red">⚠ ${names(reds)} 异常且已超期</div>`;
-  else if(ambers.length) warn=`<div class="rev-hero-warn">⚠ ${names(ambers)} 已超期 3 倍以上</div>`;
-  el.innerHTML=`<div class="rev-hero-t">${when}</div><div class="rev-hero-d">${sub}</div>${warn}
-    <button class="rev-ai-btn" onclick="openAiAdvice()">生成健康解读（参考建议，不替代医生）</button>`;
+  el.innerHTML=`<button class="btn" onclick="openAiAdvice()">生成健康解读（参考建议，不替代医生）</button>`;
 }
 function revRow(it){
   const s=revStatus(it);
@@ -3681,14 +3669,8 @@ function renderRevSettings(){
       `<div class="rev-set-row"><span>${esc(m.n)}</span>${reviewSelect(m.id,m.days)}</div>`).join('');
 }
 function renderVisitHeader(items,all){
-  const reds=items.filter(it=>revStatus(it).cls==='red').length;
-  const over=all.filter(g=>g.gdays>0&&g.days!=null&&g.days>g.gdays).length;
   const rec=items.filter(it=>it.last).length;
-  const latest=items.reduce((m,it)=>it.last&&it.last>m?it.last:m,'');
-  const chips=[{t:reds?`${reds} 项标红`:'无标红指标',cls:reds?'bad':'ok'}];
-  if(over) chips.push({t:`${over} 个大类超期`,cls:'warn'});
-  if(latest) chips.push({t:`最近检查 ${revCnDate(latest)}`,cls:''});
-  setPageHeader('复查计划',`已记录 ${rec} / ${items.length} 项 · 按大类查看`,chips);
+  setPageHeader('复查计划',`已记录 ${rec} / ${items.length} 项 · 按大类查看`);
 }
 function setPageHeader(title,sub,chips){
   const t=document.getElementById('hdrTitle'), s=document.getElementById('hdrSub'), c=document.getElementById('hdrChips');
@@ -4171,7 +4153,7 @@ async function startApp(){
 }
 
 /* ==================== 初始化（登录成功后调用） ==================== */
-const APP_VERSION='v1.12.2 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
+const APP_VERSION='v1.12.3 · 2026-11-05';   // 每次发布更新这一行，页面右上角可见
 (function(){ const v=document.getElementById('appVer'); if(v) v.textContent=APP_VERSION; })();
 async function initApp(){
   const ver=document.getElementById('appVer'); if(ver) ver.textContent=APP_VERSION;
